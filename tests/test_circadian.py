@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hue_iac.circadian import CircadianCurve, CircadianParams
+from hueman.circadian import CircadianCurve, CircadianParams
 
 P = CircadianParams()
 NOON = 65.0  # a representative solar-noon elevation (degrees)

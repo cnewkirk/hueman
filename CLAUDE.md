@@ -21,16 +21,16 @@ python3 -m pytest tests/test_engine.py
 python3 -m pytest tests/test_engine.py -k "test_motion_on"
 
 # CLI (after install)
-hue-iac -c examples/home.yaml validate
-hue-iac -c examples/home.yaml preview
-hue-iac -c examples/home.yaml plan
-hue-iac -c examples/home.yaml apply
-hue-iac -c examples/home.yaml circadian run   # the resident daemon (foreground)
-hue-iac -c examples/home.yaml watch --dry-run # legacy motion controller
+hueman -c examples/home.yaml validate
+hueman -c examples/home.yaml preview
+hueman -c examples/home.yaml plan
+hueman -c examples/home.yaml apply
+hueman -c examples/home.yaml circadian run   # the resident daemon (foreground)
+hueman -c examples/home.yaml watch --dry-run # legacy motion controller
 ```
 
 Bridge-touching commands need `HUE_APPLICATION_KEY` — set it from your bridge
-pairing (`hue-iac auth` performs trust-on-first-use pairing and TLS pinning).
+pairing (`hueman auth` performs trust-on-first-use pairing and TLS pinning).
 The bridge host lives in the config (`bridge.host`); `HUE_BRIDGE_HOST` only
 overrides it.
 
@@ -48,7 +48,7 @@ mean there are no sensors.** MotionAware surfaces under its own resource types:
   `sensitivity{sensitivity, sensitivity_max}`
 
 `state.py` indexes these (`MotionArea`, `_index_motion_areas`) and
-`hue-iac inventory` prints them. Only the legacy `watch.py` runtime is blind to
+`hueman inventory` prints them. Only the legacy `watch.py` runtime is blind to
 MotionAware (it routes just `motion`/`light_level`/`grouped_light` events and
 requires a legacy PIR sensor to even construct). MotionAware **sensitivity is a
 live-only bridge setting**: no reconciler manages it, and a daily apply neither
@@ -62,7 +62,7 @@ reverts nor recreates it.
 
 ## The two day-cycle deployment modes
 
-**Mode 1 — the circadian daemon** (`hue-iac circadian run`, typically a Docker
+**Mode 1 — the circadian daemon** (`hueman circadian run`, typically a Docker
 container near the bridge): re-samples the solar curve every 60 s and drives one
 grouped_light zone with long cross-fades from sunrise to `hand_off`, detects
 manual overrides by settle-and-compare, and owns the TV-bias hold. Night
@@ -70,12 +70,12 @@ guidance stays native on the bridge (`night_motion:` → a MotionAware
 `behavior_instance`), provisioned by `apply`.
 
 **Mode 2 — native, daemon-less**: `CircadianSceneReconciler` (+ pure
-`hue_iac/circadian_scene.py`) generates ≤6 sun-anchored knee scenes + a
+`hueman/circadian_scene.py`) generates ≤6 sun-anchored knee scenes + a
 `smart_scene` with long cross-fades; a daily cron `apply` re-anchors the
 timeslot times to real sun (idempotent — the looks are curve regime-constants).
 
 The reconcilers in `reconcile.py` (all provisioned by `apply`):
-- `NightMotionReconciler` (+ pure `hue_iac/nightmotion.py`) tunes a MotionAware `behavior_instance` for night soft-red guidance on a guide zone, backing it up first. `plan` detects zone-scene look drift via the tolerant `scene_actions_match`; apply re-PUTs the automation only when its wiring actually changes. Sun-anchored timeslots it can't re-time surface as `BLOCKED`, not a crash.
+- `NightMotionReconciler` (+ pure `hueman/nightmotion.py`) tunes a MotionAware `behavior_instance` for night soft-red guidance on a guide zone, backing it up first. `plan` detects zone-scene look drift via the tolerant `scene_actions_match`; apply re-PUTs the automation only when its wiring actually changes. Sun-anchored timeslots it can't re-time surface as `BLOCKED`, not a crash.
 - `CircadianSceneReconciler` — the native day-cycle generator (mode 2 above).
 - `SmartSceneReconciler` re-times/prunes an *existing* (e.g. app-built) `smart_scene` to real sun. Empty-floor prune → `BLOCKED` (never PUTs an empty scene); timeslots whose scene rid is unresolved are preserved, not silently dropped; backs up before the PUT.
 
@@ -165,7 +165,7 @@ show built into the circadian daemon (`circadian_daemon.py` + pure
   high frame rates (the daemon logs drop stats on exit); real per-frame control
   would need the Entertainment streaming API.
 
-Triggers (OR-combined, no arming): `hue-iac security on|off` (writes the
+Triggers (OR-combined, no arming): `hueman security on|off` (writes the
 `control_file` flags), and/or a Hue button/scene the daemon sees on SSE
 (`triggers.sse`). On startup security is always OFF and stale control-files are cleared.
 

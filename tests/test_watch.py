@@ -10,11 +10,11 @@ from __future__ import annotations
 import pytest
 import requests
 
-from hue_iac.config import Config
-from hue_iac.engine import Action, Phase, TargetState
-from hue_iac.errors import AuthError, BridgeError
-from hue_iac.state import BridgeState
-from hue_iac.watch import BridgeEvent, MotionController
+from hueman.config import Config
+from hueman.engine import Action, Phase, TargetState
+from hueman.errors import AuthError, BridgeError
+from hueman.state import BridgeState
+from hueman.watch import BridgeEvent, MotionController
 
 GL = "gl1"        # grouped_light rid for the Office room
 MOT = "mot1"      # motion service rid

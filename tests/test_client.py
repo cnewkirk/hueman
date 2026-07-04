@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from hue_iac import client as client_mod
-from hue_iac.client import HueClient
-from hue_iac.config import Bridge, TlsConfig
+from hueman import client as client_mod
+from hueman.client import HueClient
+from hueman.config import Bridge, TlsConfig
 
 FP = "9142" + "0" * 60  # 64 hex chars
 
@@ -56,7 +56,7 @@ def test_create_application_key_non_json_response_is_clean_error(monkeypatch):
     CLI can print, not a raw requests JSONDecodeError traceback."""
     import requests
 
-    from hue_iac.errors import HueIacError
+    from hueman.errors import HueIacError
 
     monkeypatch.setattr(client_mod, "verify_or_pin", lambda host, pin_file: FP)
     c = HueClient(_bridge("pin"))

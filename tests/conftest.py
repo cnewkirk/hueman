@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from hue_iac.config import Config
+from hueman.config import Config
 
 TZ_OFFSET = -5.0
 

@@ -6,11 +6,11 @@ import datetime as _dt
 
 import pytest
 
-from hue_iac.config import Anchor, Config
-from hue_iac.errors import ConfigError, HueIacError
-from hue_iac.reconcile import Change, ChangeType, SmartSceneReconciler
-from hue_iac.state import BridgeState
-from hue_iac.sun import SolarCalculator
+from hueman.config import Anchor, Config
+from hueman.errors import ConfigError, HueIacError
+from hueman.reconcile import Change, ChangeType, SmartSceneReconciler
+from hueman.state import BridgeState
+from hueman.sun import SolarCalculator
 
 
 def _doc(smart_scenes):

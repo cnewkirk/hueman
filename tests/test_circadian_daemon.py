@@ -6,10 +6,10 @@ import sys
 import pytest
 import requests
 
-from hue_iac.circadian_daemon import CircadianDaemon, _LOG
-from hue_iac.config import Config
-from hue_iac.errors import AuthError, BridgeError
-from hue_iac.watch import BridgeEvent
+from hueman.circadian_daemon import CircadianDaemon, _LOG
+from hueman.config import Config
+from hueman.errors import AuthError, BridgeError
+from hueman.watch import BridgeEvent
 
 
 @pytest.fixture(autouse=True)
@@ -253,7 +253,7 @@ def test_init_raises_bridge_error_if_zone_has_no_grouped_light():
     Without this guard every write silently fails (PUT to a None rid is a no-op)
     and the daemon runs indefinitely without driving any lights.
     """
-    from hue_iac.state import Group
+    from hueman.state import Group
 
     class _StateNoGl:
         def group(self, name: str) -> Group:
@@ -273,8 +273,8 @@ def test_init_raises_clear_error_listing_all_unknown_bias_lights():
     """A bias light absent from the bridge fails fast at startup, naming *every* bad
     name at once, instead of crash-looping on a cryptic first-name resolution error.
     """
-    from hue_iac.errors import ConfigError
-    from hue_iac.state import Group, LightRef
+    from hueman.errors import ConfigError
+    from hueman.state import Group, LightRef
 
     class _State:
         def group(self, name):
@@ -607,7 +607,7 @@ def test_bias_edge_logs_flip_at_info(caplog):
     cfg = _cfg_bias({"probe": {"enabled": True, "host": "192.0.2.50", "debounce": "0s"}})
     d = CircadianDaemon.for_test(_FakeClient(), cfg, grouped_light_rid="GL")
     d._bias_rids = {"Couch": "Lcouch"}
-    caplog.set_level(logging.INFO, logger="hue_iac.circadian_daemon")
+    caplog.set_level(logging.INFO, logger="hueman.circadian_daemon")
     t = _epoch(13, 14)
     d._tick_once(t)
     import unittest.mock as _mock
@@ -624,7 +624,7 @@ def test_bias_edge_logs_flip_at_info(caplog):
 def test_tick_logs_drive_at_info(caplog):
     """A daytime tick emits an INFO record mentioning 'drive' and the zone name."""
     daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
-    caplog.set_level(logging.INFO, logger="hue_iac.circadian_daemon")
+    caplog.set_level(logging.INFO, logger="hueman.circadian_daemon")
     daemon._tick_once(_epoch(13, 14))
     assert any(
         r.levelno == logging.INFO and "drive" in r.message and "Night Guide" in r.message
@@ -635,7 +635,7 @@ def test_tick_logs_drive_at_info(caplog):
 def test_external_event_logs_override(caplog):
     """A brightness that SETTLES far from target logs INFO 'override' + 'suspended'."""
     daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
-    caplog.set_level(logging.INFO, logger="hue_iac.circadian_daemon")
+    caplog.set_level(logging.INFO, logger="hueman.circadian_daemon")
     t0 = _epoch(12, 0)
     daemon._tick_once(t0)
     daemon._handle_event(_dim(30.0), t0 + 0.4)            # moves (from None)
@@ -795,8 +795,8 @@ def test_security_control_file_arms(tmp_path):
 
 
 def test_init_raises_listing_unknown_security_groups():
-    from hue_iac.errors import ConfigError
-    from hue_iac.state import Group
+    from hueman.errors import ConfigError
+    from hueman.state import Group
 
     class _State:
         def group(self, name):
@@ -1016,7 +1016,7 @@ def test_security_show_logs_write_failure_count(monkeypatch, caplog):
         _FlakyClient(), _cfg_security(alert_seconds=1, max_duration="2s"),
         grouped_light_rid="GL")
     d._security_rids = {"Night Guide": "GLng", "TV Viewing": "GLtv"}
-    caplog.set_level(_logging.INFO, logger="hue_iac.circadian_daemon")
+    caplog.set_level(_logging.INFO, logger="hueman.circadian_daemon")
     monkeypatch.setattr(d._stop_event, "wait", lambda *a, **k: None)
     start = _epoch(2, 0)
     seq = iter(start + 0.25 * i for i in range(0, 400))

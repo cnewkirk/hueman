@@ -8,7 +8,7 @@ as having no sensors.
 
 from __future__ import annotations
 
-from hue_iac.state import BridgeState
+from hueman.state import BridgeState
 
 
 class FakeClient:

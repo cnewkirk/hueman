@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from hue_iac.config import Color, Config, SecuritySpec, parse_duration, parse_time_ref
-from hue_iac.errors import ConfigError
+from hueman.config import Color, Config, SecuritySpec, parse_duration, parse_time_ref
+from hueman.errors import ConfigError
 from tests.conftest import make_config
 
 
@@ -89,7 +89,7 @@ def _cfg_doc(extra: dict) -> dict:
 
 def test_circadian_scene_parses_full() -> None:
     """A full circadian_scene block parses into a typed spec."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     cfg = Config.parse(_cfg_doc({"circadian_scene": {
         "smart_scene": "Golden hours", "zone": "Night Guide",
@@ -104,7 +104,7 @@ def test_circadian_scene_parses_full() -> None:
 
 def test_circadian_scene_explicit_transition_and_default_handoff() -> None:
     """An explicit duration parses to ms; hand_off defaults to 22:34."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     cfg = Config.parse(_cfg_doc({"circadian_scene": {
         "smart_scene": "X", "zone": "Z", "transition": "90m"}}))
@@ -115,7 +115,7 @@ def test_circadian_scene_explicit_transition_and_default_handoff() -> None:
 
 def test_circadian_scene_requires_zone() -> None:
     """A circadian_scene without a zone is rejected."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"circadian_scene": {"smart_scene": "X"}}))
@@ -123,7 +123,7 @@ def test_circadian_scene_requires_zone() -> None:
 
 def test_circadian_scene_rejects_sun_handoff() -> None:
     """hand_off must be a clock time, not a sun anchor."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"circadian_scene": {
@@ -132,7 +132,7 @@ def test_circadian_scene_rejects_sun_handoff() -> None:
 
 def test_no_circadian_scene_is_none() -> None:
     """Omitting circadian_scene leaves it unset."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     assert Config.parse(_cfg_doc({})).circadian_scene is None
 
@@ -151,14 +151,14 @@ def test_duplicate_policy_names_rejected() -> None:
         "motion_policies": [base, dict(base)],
     }
     with pytest.raises(ConfigError):
-        from hue_iac.config import Config
+        from hueman.config import Config
 
         Config.parse(doc)
 
 
 def test_location_tz_only_backfills_a_float_offset() -> None:
     """`tz` without tz_offset_hours parses; offset is back-filled to a float."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     cfg = Config.parse(_cfg_doc(
         {"location": {"lat": 45.5, "lon": -122.7, "tz": "America/Los_Angeles"}}
@@ -169,7 +169,7 @@ def test_location_tz_only_backfills_a_float_offset() -> None:
 
 def test_location_tz_and_offset_both_retained() -> None:
     """When both are given, both are kept (tz drives per-date derivation downstream)."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     cfg = Config.parse(_cfg_doc(
         {"location": {"lat": 45.5, "lon": -122.7, "tz_offset_hours": -7, "tz": "America/Los_Angeles"}}
@@ -180,7 +180,7 @@ def test_location_tz_and_offset_both_retained() -> None:
 
 def test_location_unknown_tz_rejected() -> None:
     """A bogus IANA name is a config error, not a runtime crash."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"location": {"lat": 45.5, "lon": -122.7, "tz": "Not/A_Zone"}}))
@@ -188,7 +188,7 @@ def test_location_unknown_tz_rejected() -> None:
 
 def test_location_requires_tz_or_offset() -> None:
     """Neither tz nor tz_offset_hours -> ConfigError (unchanged contract)."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"location": {"lat": 45.5, "lon": -122.7}}))
@@ -196,7 +196,7 @@ def test_location_requires_tz_or_offset() -> None:
 
 def test_location_empty_or_malformed_tz_rejected() -> None:
     """Empty string and path-like tz values are ConfigErrors, not ValueError crashes."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"location": {"lat": 45.5, "lon": -122.7, "tz": ""}}))
@@ -207,14 +207,14 @@ def test_location_empty_or_malformed_tz_rejected() -> None:
 
 def test_location_tz_must_be_a_string() -> None:
     """A non-string tz (e.g. an integer) is a ConfigError."""
-    from hue_iac.config import Config
+    from hueman.config import Config
 
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"location": {"lat": 45.5, "lon": -122.7, "tz": 42}}))
 
 
 def test_circadian_daemon_defaults():
-    from hue_iac.config import Config
+    from hueman.config import Config
     cfg = Config.parse(_cfg_doc({"circadian_daemon": {"zone": "Night Guide"}}))
     d = cfg.circadian_daemon
     assert d.zone == "Night Guide"
@@ -240,7 +240,7 @@ def test_circadian_daemon_defaults():
 
 
 def test_circadian_daemon_overrides_and_anchor():
-    from hue_iac.config import Config
+    from hueman.config import Config
     cfg = Config.parse(_cfg_doc({"circadian_daemon": {
         "zone": "Z", "start": "sunrise+30m", "hand_off": "23:00",
         "interval": "90s", "transition": "120s", "fade_off": "2m",
@@ -268,13 +268,13 @@ def test_circadian_daemon_overrides_and_anchor():
 
 
 def test_circadian_daemon_requires_zone():
-    from hue_iac.config import Config
+    from hueman.config import Config
     with pytest.raises(ConfigError):
         Config.parse(_cfg_doc({"circadian_daemon": {}}))
 
 
 def test_circadian_daemon_absent_is_none():
-    from hue_iac.config import Config
+    from hueman.config import Config
     assert Config.parse(_cfg_doc({})).circadian_daemon is None
 
 
@@ -283,13 +283,13 @@ def test_circadian_daemon_absent_is_none():
 # --------------------------------------------------------------------------- #
 def _daemon_bias(bias: dict):
     """Parse a config whose circadian_daemon carries the given bias block."""
-    from hue_iac.config import Config
+    from hueman.config import Config
     cfg = Config.parse(_cfg_doc({"circadian_daemon": {"zone": "Night Guide", "bias": bias}}))
     return cfg.circadian_daemon.bias
 
 
 def test_bias_parses_full() -> None:
-    from hue_iac.config import BiasSpec
+    from hueman.config import BiasSpec
     bias = _daemon_bias({
         "lights": {
             "Play bars": {"look": {"mirek": 153, "brightness": 28}, "idle": "off"},
@@ -365,7 +365,7 @@ def test_bias_edge_transition_explicit() -> None:
 
 
 def test_bias_absent_is_none() -> None:
-    from hue_iac.config import Config
+    from hueman.config import Config
     cfg = Config.parse(_cfg_doc({"circadian_daemon": {"zone": "Night Guide"}}))
     assert cfg.circadian_daemon.bias is None
 
@@ -486,7 +486,7 @@ def test_circadian_night_start_is_rejected_as_removed() -> None:
     loudly instead of silently doing nothing."""
     doc = _cfg_doc({})
     doc["circadian"] = {"day_mirek": 233, "night_start": "23:00"}
-    from hue_iac.config import Config
+    from hueman.config import Config
     with pytest.raises(ConfigError, match="night_start"):
         Config.parse(doc)
 

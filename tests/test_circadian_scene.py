@@ -5,13 +5,13 @@ from __future__ import annotations
 import datetime as _dt
 import pytest
 
-from hue_iac.circadian import CircadianCurve, CircadianParams
-from hue_iac.circadian_scene import MAX_TIMESLOTS, circadian_timeslots
-from hue_iac.config import Config
-from hue_iac.nightmotion import scene_body
-from hue_iac.reconcile import ChangeType, CircadianSceneReconciler
-from hue_iac.state import BridgeState
-from hue_iac.sun import SolarCalculator
+from hueman.circadian import CircadianCurve, CircadianParams
+from hueman.circadian_scene import MAX_TIMESLOTS, circadian_timeslots
+from hueman.config import Config
+from hueman.nightmotion import scene_body
+from hueman.reconcile import ChangeType, CircadianSceneReconciler
+from hueman.state import BridgeState
+from hueman.sun import SolarCalculator
 
 SOLAR = SolarCalculator(40.7128, -74.0060, -4)  # NYC, EDT
 PARAMS = CircadianParams()     # day 233/100, evening 370/60, night 454/15

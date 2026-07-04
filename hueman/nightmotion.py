@@ -5,7 +5,7 @@ guidelight zone, and transforming an existing MotionAware ``behavior_instance``
 config so every timeslot targets the whole-apartment zone, with the night
 timeslot rewritten to recall the soft-red scene and switch off quickly.
 
-The reconciler in :mod:`hue_iac.reconcile` owns the bridge I/O; this module only
+The reconciler in :mod:`hueman.reconcile` owns the bridge I/O; this module only
 produces request bodies from inputs.
 """
 

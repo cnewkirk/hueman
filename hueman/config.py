@@ -1,6 +1,6 @@
 """Declarative configuration model and loader.
 
-This is the user-facing "language" of hue-iac. A YAML document is parsed into a
+This is the user-facing "language" of hueman. A YAML document is parsed into a
 tree of frozen dataclasses with eager validation, so an invalid config fails at
 ``validate``/``plan`` time with a precise message rather than mid-apply against
 the live bridge.
@@ -61,7 +61,7 @@ def parse_time_ref(value: Any, *, ctx: str) -> str:
     """Validate a time reference: ``HH:MM``, ``sunrise``, or ``sunset``.
 
     Returned verbatim; resolution to a concrete minute happens later against
-    the day's :class:`~hue_iac.sun.SunTimes` so the same config works all year.
+    the day's :class:`~hueman.sun.SunTimes` so the same config works all year.
     """
     if value in ("sunrise", "sunset"):
         return value

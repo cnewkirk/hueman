@@ -1,11 +1,11 @@
 from __future__ import annotations
 import datetime as _dt
 
-from hue_iac.circadian import CircadianParams
-from hue_iac.circadian_control import CircadianController, DriveTo, FadeOff, Hold
-from hue_iac.config import CircadianDaemonSpec
-from hue_iac.config import Anchor
-from hue_iac.sun import SolarCalculator
+from hueman.circadian import CircadianParams
+from hueman.circadian_control import CircadianController, DriveTo, FadeOff, Hold
+from hueman.config import CircadianDaemonSpec
+from hueman.config import Anchor
+from hueman.sun import SolarCalculator
 
 TZ = -7.0  # PDT, matches the test date
 SOLAR = SolarCalculator(45.5152, -122.6784, TZ)  # Portland

@@ -8,11 +8,11 @@ from dataclasses import replace
 
 import pytest
 
-from hue_iac.config import Config
-from hue_iac.errors import ConfigError
-from hue_iac.nightmotion import scene_actions_match, scene_body, transform_automation
-from hue_iac.reconcile import ChangeType, NightMotionReconciler
-from hue_iac.state import BridgeState
+from hueman.config import Config
+from hueman.errors import ConfigError
+from hueman.nightmotion import scene_actions_match, scene_body, transform_automation
+from hueman.reconcile import ChangeType, NightMotionReconciler
+from hueman.state import BridgeState
 
 FIXTURE = json.loads(
     (pathlib.Path(__file__).parent / "fixtures" / "main_room_behavior.json").read_text()

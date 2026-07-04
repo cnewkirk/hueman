@@ -10,7 +10,7 @@ without shipping Signify's CA bundle.
 This module only captures/loads the pinned fingerprint (a raw TLS handshake at
 startup, TOFU on first run). Enforcement is NOT a one-shot pre-flight check —
 that alone would leave a TOCTOU window between the probe and the real requests.
-Instead :class:`hue_iac.client._FingerprintAdapter` passes the fingerprint to
+Instead :class:`hueman.client._FingerprintAdapter` passes the fingerprint to
 urllib3 as ``assert_fingerprint``, so *every* connection the session opens
 (including the long-lived SSE stream) verifies the leaf certificate against the
 pin at handshake time.

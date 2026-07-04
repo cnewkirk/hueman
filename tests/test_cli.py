@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from hue_iac.cli import Cli
-from hue_iac.errors import HueIacError
-from hue_iac.reconcile import Change, ChangeType
+from hueman.cli import Cli
+from hueman.errors import HueIacError
+from hueman.reconcile import Change, ChangeType
 
 
 def test_circadian_resume_writes_control_file(tmp_path):
-    import hue_iac.cli as climod
+    import hueman.cli as climod
     cfgfile = tmp_path / "hue.yaml"
     ctrl = tmp_path / ".resume"
     cfgfile.write_text(
@@ -24,7 +24,7 @@ def test_circadian_resume_writes_control_file(tmp_path):
 
 
 def test_circadian_parser_has_run_and_resume():
-    from hue_iac.cli import Cli
+    from hueman.cli import Cli
     args = Cli()._build_parser().parse_args(["circadian", "run"])
     assert args.command == "circadian" and args.circadian_cmd == "run"
 

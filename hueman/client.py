@@ -2,7 +2,7 @@
 
 Covers exactly what the IaC workflow needs: link-button key creation, typed
 resource GET/POST/PUT/DELETE, and a couple of convenience lookups. TLS identity
-is established up-front via :mod:`hue_iac.pin` (trust-on-first-use) or a CA
+is established up-front via :mod:`hueman.pin` (trust-on-first-use) or a CA
 bundle; we never blindly disable verification without having pinned first.
 
 API surface used here is the documented v2 model
@@ -21,7 +21,7 @@ from .config import Bridge, TlsConfig
 from .errors import AuthError, BridgeError
 from .pin import verify_or_pin
 
-_KEY_CREATE_DEVICETYPE = "hue-iac#cli"
+_KEY_CREATE_DEVICETYPE = "hueman#cli"
 
 
 class _FingerprintAdapter(HTTPAdapter):
@@ -84,7 +84,7 @@ class HueClient:
 
     def _request(self, method: str, path: str, *, json_body=None, need_key: bool = True) -> dict:
         if need_key and not self.bridge.application_key:
-            raise AuthError("no application key; run 'hue-iac auth' to pair with the bridge")
+            raise AuthError("no application key; run 'hueman auth' to pair with the bridge")
         try:
             resp = self._session.request(
                 method, self._url(path), json=json_body, timeout=self.timeout
