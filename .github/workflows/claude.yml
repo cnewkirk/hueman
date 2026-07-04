@@ -1,0 +1,38 @@
+name: Claude Code
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Task for Claude to perform
+        required: true
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude:
+    # Run on manual dispatch, or when an issue/PR comment mentions @claude.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude Code Base Action
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt: ${{ github.event.inputs.prompt || github.event.comment.body }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_tools: "Bash,Edit,Read,Write,Glob,Grep"
+          timeout_minutes: "20"

@@ -1,0 +1,252 @@
+{
+  "id": "7b7956e2-35c5-4606-9214-4c235495f647",
+  "metadata": {
+    "name": "Night Guide \u2014 Night"
+  },
+  "group": {
+    "rid": "f9bd4854-26ae-4984-9db6-8e349665ebc5",
+    "rtype": "zone"
+  },
+  "actions": [
+    {
+      "target": {
+        "rid": "076d9b53-e515-4c45-869d-081aeabbb719",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "42c89f89-aafd-4cfc-80f0-4303ee2989fd",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "106094a8-4c9d-4ba6-8ba3-1b432c991fd4",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "50f40bf2-2f8e-4c43-9258-be08c127bc63",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "155c6403-d9cb-4e51-9f83-88d916048add",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "242730b5-eced-4084-b4bf-d1333993811a",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "14f8ec6c-db15-4db4-8d54-101f92880f7b",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "81455dac-6c39-4cdf-a5aa-5656b0626473",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "44887ccc-fd7f-4797-a025-9b4225d3cc4e",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "e4e9cada-da48-482a-bb03-0d4d479e8b78",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "e2e34923-06d3-47c2-bc9c-7dfb06c81be4",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    },
+    {
+      "target": {
+        "rid": "72955a2d-2ee9-46f2-b760-07c5cb003bbf",
+        "rtype": "light"
+      },
+      "action": {
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 3.0
+        },
+        "color": {
+          "xy": {
+            "x": 0.6971,
+            "y": 0.3022
+          }
+        }
+      }
+    }
+  ]
+}

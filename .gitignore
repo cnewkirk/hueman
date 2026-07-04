@@ -1,0 +1,29 @@
+# Trust-on-first-use certificate pin (per-deployment, do not commit)
+.hue-pin.json
+
+# Local config overrides that may contain a host or key
+hue.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Application key captured by `auth` (secret, do not commit)
+.hue-key
+
+# Pre-edit backups of bridge resources (local safety)
+.hue-backup/
+
+# Runtime logs (the live daemon logs on the NAS, not in the repo)
+logs/
+
+# Claude Code local session state (personal settings + worktrees)
+.claude/settings.local.json
+.claude/worktrees/
+.webos-client-key
+
+# live config lives in the private ops repo (symlink locally)
+hue.yaml

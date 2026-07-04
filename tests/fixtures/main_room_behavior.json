@@ -1,0 +1,317 @@
+{
+  "id": "fd1a0e35-6743-4a44-811a-9697fb738d94",
+  "type": "behavior_instance",
+  "script_id": "67d9395b-4403-42cc-b5f0-740b699d67c6",
+  "enabled": true,
+  "state": null,
+  "configuration": {
+    "light_level": {
+      "daylight": {
+        "sunrise_sunset": {
+          "sunrise_offset": {
+            "hours": 0
+          },
+          "sunset_offset": {
+            "hours": 0
+          }
+        }
+      }
+    },
+    "motion": {
+      "motion_service": {
+        "rid": "91c99d18-ed51-40e8-a077-984a9f634f6b",
+        "rtype": "convenience_area_motion"
+      },
+      "when": {
+        "timeslots": [
+          {
+            "on_motion": {
+              "recall_single": [
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "7abdf896-fc62-481b-b2a8-0dd1ec41203e",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "69413dec-2f84-4a2a-8611-59bf567fb84d",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "5fab80dd-3449-4d89-b109-a27bc125ba27",
+                      "rtype": "scene"
+                    }
+                  }
+                }
+              ]
+            },
+            "on_no_motion": {
+              "after": {
+                "minutes": 15
+              },
+              "recall_single": [
+                {
+                  "action": "all_off"
+                },
+                {
+                  "action": "all_off"
+                },
+                {
+                  "action": "all_off"
+                }
+              ]
+            },
+            "start_time": {
+              "time": {
+                "hour": 17,
+                "minute": 0
+              },
+              "type": "time"
+            }
+          },
+          {
+            "on_motion": {
+              "recall_single": [
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "e30bbd14-0faa-4a86-a7d9-a6ed610c0a43",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "d82fc0aa-273e-496a-9a50-b07c724ec432",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "42d22ec3-fbc7-4905-9b01-3a802e613875",
+                      "rtype": "scene"
+                    }
+                  }
+                }
+              ]
+            },
+            "on_no_motion": {
+              "after": {
+                "minutes": 10
+              },
+              "recall_single": [
+                {
+                  "action": "all_off"
+                },
+                {
+                  "action": "all_off"
+                },
+                {
+                  "action": "all_off"
+                }
+              ]
+            },
+            "start_time": {
+              "time": {
+                "hour": 23,
+                "minute": 0
+              },
+              "type": "time"
+            }
+          },
+          {
+            "on_motion": {
+              "recall_single": [
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "514c7c2b-44a3-4919-a6c6-e6a9e2222d39",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "7de733f1-3898-4216-939d-e1d8345a085d",
+                      "rtype": "scene"
+                    }
+                  }
+                },
+                {
+                  "action": {
+                    "recall": {
+                      "rid": "28823202-3cfa-4612-b8d9-e0ff44902999",
+                      "rtype": "scene"
+                    }
+                  }
+                }
+              ]
+            },
+            "start_time": {
+              "time": {
+                "hour": 7,
+                "minute": 0
+              },
+              "type": "time"
+            }
+          }
+        ]
+      },
+      "where": [
+        {
+          "group": {
+            "rid": "93a15eee-9445-43c5-9aa1-ce5224c2e459",
+            "rtype": "room"
+          }
+        },
+        {
+          "group": {
+            "rid": "fc073617-a78d-4041-b5eb-dba19ac61264",
+            "rtype": "room"
+          }
+        },
+        {
+          "group": {
+            "rid": "2b2dec0b-52b0-4353-a1d4-d6b89d149c08",
+            "rtype": "room"
+          }
+        }
+      ]
+    },
+    "source": {
+      "rid": "1c502cad-98f9-4c56-9369-8230f0ee6bec",
+      "rtype": "motion_area_configuration"
+    }
+  },
+  "dependees": [
+    {
+      "target": {
+        "rid": "1c502cad-98f9-4c56-9369-8230f0ee6bec",
+        "rtype": "motion_area_configuration"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "93a15eee-9445-43c5-9aa1-ce5224c2e459",
+        "rtype": "room"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "fc073617-a78d-4041-b5eb-dba19ac61264",
+        "rtype": "room"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "2b2dec0b-52b0-4353-a1d4-d6b89d149c08",
+        "rtype": "room"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "7abdf896-fc62-481b-b2a8-0dd1ec41203e",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "69413dec-2f84-4a2a-8611-59bf567fb84d",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "5fab80dd-3449-4d89-b109-a27bc125ba27",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "e30bbd14-0faa-4a86-a7d9-a6ed610c0a43",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "d82fc0aa-273e-496a-9a50-b07c724ec432",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "42d22ec3-fbc7-4905-9b01-3a802e613875",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "514c7c2b-44a3-4919-a6c6-e6a9e2222d39",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "7de733f1-3898-4216-939d-e1d8345a085d",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "28823202-3cfa-4612-b8d9-e0ff44902999",
+        "rtype": "scene"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    },
+    {
+      "target": {
+        "rid": "91c99d18-ed51-40e8-a077-984a9f634f6b",
+        "rtype": "convenience_area_motion"
+      },
+      "level": "critical",
+      "type": "ResourceDependee"
+    }
+  ],
+  "status": "running",
+  "last_error": "",
+  "metadata": {
+    "name": "Main Room"
+  }
+}

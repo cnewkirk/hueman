@@ -1,0 +1,23 @@
+# Build cruft
+.venv
+.git
+tests
+build
+dist
+*.egg-info
+*.pyc
+__pycache__
+.pytest_cache
+
+# Dev / project files not needed in the image
+.claude
+docs
+deploy
+examples
+
+# Secrets and runtime config — NEVER bake into the image
+hue.yaml
+hue.local.yaml
+.hue-key
+.hue-pin.json
+.hue-backup

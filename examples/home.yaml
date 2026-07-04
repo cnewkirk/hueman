@@ -1,0 +1,208 @@
+# ---------------------------------------------------------------------------
+# hue-iac example configuration
+#
+# Declarative desired state for a Hue Bridge Pro. Run:
+#   hue-iac -c examples/home.yaml validate       # check syntax
+#   hue-iac -c examples/home.yaml preview        # see the circadian curve
+#   hue-iac -c examples/home.yaml plan           # diff against the bridge
+#   hue-iac -c examples/home.yaml apply          # provision areas/scenes/night-red
+#   hue-iac -c examples/home.yaml circadian run  # run the circadian + TV-bias daemon
+#   hue-iac -c examples/home.yaml watch          # legacy motion controller
+# ---------------------------------------------------------------------------
+
+bridge:
+  host: 192.0.2.2                # or set $HUE_BRIDGE_HOST and omit this
+  # The application key is read from $HUE_APPLICATION_KEY by default so it
+  # never lives in version control. Run `hue-iac auth` to create one.
+  application_key_env: HUE_APPLICATION_KEY
+  tls:
+    mode: pin                        # pin (trust-on-first-use) | cacert | insecure
+    pin_file: .hue-pin.json
+
+# Used to compute real sunrise/sunset locally for circadian colour and for
+# any timeslot that starts at "sunrise"/"sunset". Prefer `tz` (IANA name) —
+# it tracks DST automatically; `tz_offset_hours` is the fixed-offset fallback.
+location:
+  lat: 40.7128
+  lon: -74.0060
+  tz: America/New_York
+
+# Declarative light-to-area assignment. Every light should have a home: with
+# require_all_lights_assigned on (the default), `plan` flags any light that
+# isn't in a declared room, and `apply` refuses until you assign it.
+# A light lives in exactly one room but may appear in any number of zones.
+require_all_lights_assigned: true
+areas:
+  rooms:
+    - name: Office
+      type: office                   # Hue room archetype (optional)
+      lights:
+        - Office desk lamp
+        - Office ceiling 1
+        - Office ceiling 2
+    - name: Reception
+      type: front_door
+      lights:
+        - Secretary desk lamp
+  zones:
+    - name: Night pathway             # overlaps rooms; used for nighttime routing
+      lights:
+        - Secretary desk lamp
+        - Office ceiling 1
+    - name: Living space              # the zone the circadian daemon drives
+      lights:
+        - Office ceiling 1
+        - Office ceiling 2
+        - Secretary desk lamp
+
+# Optional: tune the circadian curve. Defaults track a natural daylight arc.
+circadian:
+  day_mirek: 233                     # ~4300 K crisp daylight at midday
+  evening_mirek: 370                 # ~2700 K warm white after dusk
+  night_mirek: 454                   # ~2200 K amber in the small hours
+  day_brightness: 100
+  evening_brightness: 55
+  night_brightness: 15
+  ramp_minutes: 90                   # smooth 90-min dawn/dusk transitions
+
+# ---------------------------------------------------------------------------
+# The circadian daemon (`hue-iac circadian run`) — the resident runtime.
+# Drives one zone smoothly along the solar curve from `start` to `hand_off`,
+# steps back when it detects a manual override (settle-and-compare), and holds
+# a TV-bias look on the viewing lights while the TV is on.
+# ---------------------------------------------------------------------------
+circadian_daemon:
+  zone: "Living space"
+  start: sunrise
+  hand_off: "22:30"                  # after this, night_motion owns the lights
+  interval: 60s                      # curve tick cadence
+  transition: 75s                    # steady-state cross-fade (> interval = seamless)
+  fade_off: 90s                      # the hand-off fade to dark
+  manual_override:
+    detect: true
+    control_file: .hue-circadian-resume   # `hue-iac circadian resume` touches this
+    resume_on_power_cycle: true
+    daily_safety_resume: true
+  # TV-aware bias hold: while the TV is on, each light below holds its `look`;
+  # when it turns off, `idle: circadian` lights rejoin the room's curve (or
+  # `idle: "off"` lights go dark). TV on/off flips use the short `transition`
+  # edge fade; the steady curve drift keeps the long one.
+  bias:
+    transition: 2s
+    lights:
+      "Office ceiling 1":
+        look:
+          mirek: 153                 # ~6500 K bright backlight behind the screen
+          brightness: 95
+        idle: circadian
+      "Office ceiling 2":
+        look:
+          mirek: 400                 # warm + dim to cut glare while watching
+          brightness: 15
+        idle: circadian
+    triggers:                        # OR-combined; all optional
+      probe:                         # daemon TCP-probes the TV itself
+        enabled: true
+        host: 192.0.2.20             # the TV's IP; port 3001 is open while on (webOS)
+        mode: tcp
+        port: 3001
+        interval: 2s
+        debounce: 4s                 # a false flip needs two consecutive bad polls
+      control_file:                  # out-of-band override (e.g. touched by a script)
+        on_file: .tv-on
+        off_file: .tv-off
+
+# Night motion guidance (native, provisioned by `apply`): a Bridge Pro
+# MotionAware automation recalls a soft-red zone scene on motion at night.
+# `night_only` emits THREE timeslots: night_start, a 00:00 clone (a single
+# MotionAware timeslot does not wrap past midnight, so the clone carries the
+# small hours), and an actionless day_start slot — without it the wrapped
+# 00:00 slot governs the whole day and dark evenings before night_start get
+# red recalls and all_off.
+night_motion:
+  automation: "Main Room"            # the MotionAware automation to re-target
+  zone: "Night pathway"
+  mode: night_only                   # the daemon owns the day; red only at night
+  start: "22:30"
+  day_start: "08:00"                 # night slots end here (default 08:00)
+  timeout: 3m                        # all-off after this much stillness
+  day:                               # kept for mode: full re-targeting
+    mirek: 233
+    brightness: 100
+  evening:
+    mirek: 346
+    brightness: 100
+  night:
+    hex: "#ff1400"                   # deep red, easy on night-adjusted eyes
+    brightness: 3
+
+# ---------------------------------------------------------------------------
+# Legacy `watch` runtime (per-PIR-sensor motion policies). Predates the daemon
+# and MotionAware — see README "Limitations" before relying on it.
+# ---------------------------------------------------------------------------
+motion_policies:
+  # --- Main office: follows the sun all day, fully dark overnight ----------
+  - name: Office circadian
+    sensor: Office sensor
+    rooms: [Office]
+    sensitivity: high
+    light_level:
+      threshold_lux: 12              # skip switching on when it's already bright
+    dim_before_off:
+      duration: 20s                  # dim as a 20s warning before going dark
+      recovery: true                 # restore to full if motion returns mid-warning
+    manual_override:
+      respect: true
+      pause: 2h                      # a hand-set scene pauses motion for 2 hours
+      resume_on_off: true            # turning the room off re-arms motion early
+    timeslots:
+      - name: day
+        start: sunrise
+        on_motion: circadian          # colour temperature tracks time of day
+        timeout: 12m
+      - name: evening
+        start: sunset
+        on_motion: circadian
+        timeout: 8m
+      - name: night
+        start: "23:00"
+        # Dead of night: very soft, short, and fully off afterwards.
+        on_motion:
+          brightness: 8
+          color:
+            hex: "#ff2a00"            # soft red, easy on night-adjusted eyes
+        timeout: 90s
+        standby:
+          on: false                  # everything off when no motion at night
+
+  # --- Secretary's desk: a red nightlight that never fully sleeps ----------
+  - name: Secretary nightlight
+    sensor: Reception sensor
+    rooms: [Reception]
+    sensitivity: medium
+    manual_override:
+      respect: true
+      pause: 1h
+    timeslots:
+      - name: day
+        start: sunrise
+        on_motion: circadian
+        timeout: 10m
+      - name: evening
+        start: sunset
+        on_motion: circadian
+        timeout: 6m
+      - name: night
+        start: "22:30"
+        # Walking out at 3am: soft red comes up to light the way, then drops
+        # back to the dim red nightlight (not off) after a short timeout.
+        on_motion:
+          brightness: 20
+          color:
+            hex: "#ff1500"
+        timeout: 2m
+        standby:
+          on: true
+          brightness: 2              # barely-there red nightlight at the desk
+          color:
+            hex: "#ff0000"
