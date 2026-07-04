@@ -55,6 +55,17 @@ DSM ships with the SFTP subsystem disabled, so plain `scp` fails
 Alternatively, skip building on the NAS entirely: Container Manager → Image →
 Import lets you load an image `.tar` exported from your dev machine.
 
+## TV-bias shared mount needs world-writable permissions
+
+If you use the TV-bias control-file trigger (see "TV-bias signalling" in the
+generic doc), Container Manager tends to run the two containers under
+mismatched UIDs — create the shared signal directory world-writable once:
+
+```sh
+mkdir -p /volume1/<share>/homeassistant/tv-signal
+chmod 777 /volume1/<share>/homeassistant/tv-signal
+```
+
 ## Relationship to the re-anchor cron
 
 [`README.md`](README.md) in this directory documents the older daemon-less
