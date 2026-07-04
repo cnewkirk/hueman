@@ -2,9 +2,9 @@
 
 Where ``apply`` provisions native bridge resources, this module is the *daemon*
 alternative: a persistent process that, every tick, asks the pure
-:class:`~hue_iac.circadian_control.CircadianController` what the zone should look
+:class:`~hueman.circadian_control.CircadianController` what the zone should look
 like *right now* and writes that to the zone's ``grouped_light`` service with a
-smooth transition. It mirrors :class:`hue_iac.watch.MotionController` almost
+smooth transition. It mirrors :class:`hueman.watch.MotionController` almost
 exactly — a tick thread plus an SSE event loop and a capped-backoff reconnect
 loop — but for one zone and the circadian state machine instead of per-area
 motion engines.
@@ -62,7 +62,7 @@ from .state import BridgeState
 from .sun import SolarCalculator
 from .watch import BridgeEvent, HueEventStream
 
-_LOG = logging.getLogger("hue_iac.circadian_daemon")
+_LOG = logging.getLogger("hueman.circadian_daemon")
 
 
 class CircadianDaemon:
@@ -70,14 +70,14 @@ class CircadianDaemon:
 
     Args:
         client: An authenticated bridge client.
-        state: A loaded :class:`~hue_iac.state.BridgeState` (used to resolve the
+        state: A loaded :class:`~hueman.state.BridgeState` (used to resolve the
             zone's ``grouped_light`` id and an optional resume-trigger scene).
         config: The parsed IaC configuration; ``config.circadian_daemon`` must
             be present.
         clock: Callable returning epoch seconds; injectable for testing.
         sleep: Sleep function used for reconnect backoff; injectable for testing.
         stream_factory: Builds the SSE stream each (re)connect; defaults to a
-            :class:`~hue_iac.watch.HueEventStream` over ``client``.
+            :class:`~hueman.watch.HueEventStream` over ``client``.
     """
 
     def __init__(
@@ -102,7 +102,7 @@ class CircadianDaemon:
                 raise ConfigError(
                     "circadian_daemon.bias references light(s) not on the bridge: "
                     + ", ".join(repr(name) for name in missing)
-                    + " — run `hue-iac inventory` to list available light names"
+                    + " — run `hueman inventory` to list available light names"
                 )
             self._bias_sse_on_rid = self._resolve_resume_trigger(state, spec.bias.sse_on)
             self._bias_sse_off_rid = self._resolve_resume_trigger(state, spec.bias.sse_off)
@@ -114,7 +114,7 @@ class CircadianDaemon:
                 raise ConfigError(
                     "security.groups references group(s) not on the bridge: "
                     + ", ".join(repr(g) for g in missing)
-                    + " — run `hue-iac inventory` to list available group names"
+                    + " — run `hueman inventory` to list available group names"
                 )
             no_gl = [g for g in sec.groups if state.group(g).grouped_light_rid is None]
             if no_gl:
@@ -321,7 +321,7 @@ class CircadianDaemon:
         A daemon thread ticks the controller every ``interval`` seconds; the
         main thread consumes the SSE stream inside a capped-backoff reconnect
         loop, routing each event to :meth:`_handle_event`. Mirrors
-        :meth:`hue_iac.watch.MotionController.run`'s stop/lock/backoff discipline.
+        :meth:`hueman.watch.MotionController.run`'s stop/lock/backoff discipline.
 
         Args:
             max_reconnects: Stop after this many connect attempts (for tests);

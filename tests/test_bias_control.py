@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hue_iac.bias_control import (
+from hueman.bias_control import (
     BiasDrive,
     BiasHold,
     BiasOff,
@@ -10,8 +10,8 @@ from hue_iac.bias_control import (
     bias_actions,
     unknown_bias_lights,
 )
-from hue_iac.circadian_control import DriveTo
-from hue_iac.config import BiasLight, BiasSpec, Color, LightState
+from hueman.circadian_control import DriveTo
+from hueman.config import BiasLight, BiasSpec, Color, LightState
 
 
 def _spec(*lights: tuple[str, str]) -> BiasSpec:

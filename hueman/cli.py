@@ -1,4 +1,4 @@
-"""Command-line interface for hue-iac.
+"""Command-line interface for hueman.
 
 Subcommands:
     auth      Pair with the bridge (press the link button) and print the key.
@@ -49,8 +49,8 @@ class Cli:
 
     def _build_parser(self) -> argparse.ArgumentParser:
         """Construct the argument parser and its subcommands."""
-        parser = argparse.ArgumentParser(prog="hue-iac", description="Declarative Philips Hue management.")
-        parser.add_argument("--version", action="version", version=f"hue-iac {__version__}")
+        parser = argparse.ArgumentParser(prog="hueman", description="Declarative Philips Hue management.")
+        parser.add_argument("--version", action="version", version=f"hueman {__version__}")
         parser.add_argument(
             "-c", "--config", default="hue.yaml", help="path to the config file (default: hue.yaml)"
         )
@@ -188,7 +188,7 @@ class Cli:
         state = BridgeState(client).load()
         controller = MotionController(client, state, config, dry_run=args.dry_run)
         mode = " (dry-run)" if args.dry_run else ""
-        print(f"hue-iac watching {len(config.motion_policies)} policy/policies{mode}; Ctrl-C to stop.")
+        print(f"hueman watching {len(config.motion_policies)} policy/policies{mode}; Ctrl-C to stop.")
         try:
             controller.run()
         except KeyboardInterrupt:
@@ -211,7 +211,7 @@ class Cli:
         client = HueClient(config.bridge)
         state = BridgeState(client).load()
         daemon = CircadianDaemon(client, state, config)
-        print(f"hue-iac circadian daemon driving '{config.circadian_daemon.zone}'; Ctrl-C to stop.")
+        print(f"hueman circadian daemon driving '{config.circadian_daemon.zone}'; Ctrl-C to stop.")
         try:
             daemon.run()
         except KeyboardInterrupt:
@@ -357,7 +357,7 @@ class Cli:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Module entry point used by the ``hue-iac`` console script."""
+    """Module entry point used by the ``hueman`` console script."""
     return Cli().run(argv)
 
 

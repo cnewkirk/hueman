@@ -8,7 +8,7 @@ is always safe to run.
 
 The only persistent bridge resource the motion policies own is the motion
 sensor's *sensitivity*; the live colour/timing behaviour is enforced at runtime
-by :mod:`hue_iac.watch`. Keeping sensitivity here means a single ``apply`` fully
+by :mod:`hueman.watch`. Keeping sensitivity here means a single ``apply`` fully
 provisions the declarative surface, and the reconciler base class leaves room
 for additional resource kinds (such as scenes) without changing the CLI.
 """
@@ -86,7 +86,7 @@ class Reconciler(abc.ABC):
 
     Args:
         client: An authenticated bridge client.
-        state: A loaded :class:`~hue_iac.state.BridgeState`.
+        state: A loaded :class:`~hueman.state.BridgeState`.
         config: The parsed IaC configuration.
     """
 
@@ -647,8 +647,8 @@ class NightMotionReconciler(Reconciler):
 class CircadianSceneReconciler(Reconciler):
     """Generates a smooth, sun-anchored circadian ``smart_scene`` from the curve.
 
-    Samples :mod:`hue_iac.circadian` at the day's knee times (via
-    :func:`hue_iac.circadian_scene.circadian_timeslots`) into up to six zone scenes
+    Samples :mod:`hueman.circadian` at the day's knee times (via
+    :func:`hueman.circadian_scene.circadian_timeslots`) into up to six zone scenes
     and wires them to a ``smart_scene`` whose long ``transition_duration`` makes the
     bridge fade continuously between them — a native, daemon-free circadian cycle
     that re-anchors to the real sun on every apply. Built on the same scene/backup
@@ -912,7 +912,7 @@ class Planner:
 
     Args:
         client: An authenticated bridge client.
-        state: A loaded :class:`~hue_iac.state.BridgeState`.
+        state: A loaded :class:`~hueman.state.BridgeState`.
         config: The parsed IaC configuration.
     """
 

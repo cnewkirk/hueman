@@ -1,4 +1,4 @@
-# hue-iac circadian daemon — Synology Container Manager runbook
+# hueman circadian daemon — Synology Container Manager runbook
 
 This document covers running the circadian daemon as a Docker container on the NAS
 via Synology Container Manager. The container replaces the re-anchor cron approach:
@@ -16,16 +16,16 @@ daemon.** The cron job is retired once this container is confirmed running.
   - `.hue-key` — bridge application key (chmod 600); read by the **host shell** to
     populate `$HUE_APPLICATION_KEY`, **not** mounted into the container
   - `.hue-pin.json` — TLS pin (chmod 600); **must be pre-pinned** — the read-only
-    container mount cannot perform trust-on-first-use (run `hue-iac auth` once from a
+    container mount cannot perform trust-on-first-use (run `hueman auth` once from a
     host shell to create it if starting fresh)
 
-> **`hue.yaml` MUST contain a `circadian_daemon:` block.** `hue-iac circadian run`
+> **`hue.yaml` MUST contain a `circadian_daemon:` block.** `hueman circadian run`
 > raises `HueIacError("no 'circadian_daemon' block in config")` and the container exits
 > immediately (crash-loops under `--restart always`) if it is missing. At minimum the
 > block needs `zone:` (the zone the daemon drives). The daemon tunables also
 > live here — notably `manual_override.control_file` (the resume-signal file, default
 > `.hue-circadian-resume`) and `log.path` (default `logs/circadian.log`, which lands
-> under the mounted `/data/logs`). See `hue_iac/config.py` (`CircadianDaemonSpec`) for the
+> under the mounted `/data/logs`). See `hueman/config.py` (`CircadianDaemonSpec`) for the
 > full set of keys and their defaults. If yours doesn't have the block yet, add
 > it before building.
 >
@@ -44,18 +44,18 @@ Throughout this document, substitute `<share>` with the actual share name
 ## Step 1 — Build the image on the NAS
 
 The NAS keeps a plain **build context** at `$HUE_IAC_HOME/build/` (Dockerfile,
-`hue_iac/`, `pyproject.toml`, `README.md`) — **not a git clone** (the live deploy
+`hueman/`, `pyproject.toml`, `README.md`) — **not a git clone** (the live deploy
 has no `src/` checkout; source is copied in from the dev machine). From your dev machine,
 sync the current `main` into it, then build over SSH:
 
 ```sh
 # On your dev machine, from a checkout of this repo at origin/main:
-rsync -r --delete hue_iac/ <user>@<nas>:/volume1/<share>/hue-iac/build/hue_iac/
-rsync pyproject.toml Dockerfile <user>@<nas>:/volume1/<share>/hue-iac/build/
+rsync -r --delete hueman/ <user>@<nas>:/volume1/<share>/hueman/build/hueman/
+rsync pyproject.toml Dockerfile <user>@<nas>:/volume1/<share>/hueman/build/
 # (scp also works but needs -O — Synology has SFTP disabled.)
 
 # On the NAS (docker is not on the non-interactive PATH — use the full path):
-sudo /usr/local/bin/docker build -t hue-iac:latest /volume1/<share>/hue-iac/build
+sudo /usr/local/bin/docker build -t hueman:latest /volume1/<share>/hueman/build
 ```
 
 Alternatively, import a pre-built tarball via Container Manager UI:
@@ -66,7 +66,7 @@ Container Manager → Image → Import → select the `.tar` file exported from 
 ## Step 2 — Start the daemon
 
 ```sh
-HUE_IAC_HOME=/volume1/<share>/hue-iac
+HUE_IAC_HOME=/volume1/<share>/hueman
 
 docker run -d \
   --name hue-circadian \
@@ -77,7 +77,7 @@ docker run -d \
   -v "$HUE_IAC_HOME/logs":/data/logs \
   -v /volume1/<share>/homeassistant/tv-signal:/data/tvsig \
   -e HUE_APPLICATION_KEY="$(cat $HUE_IAC_HOME/.hue-key)" \
-  hue-iac:latest
+  hueman:latest
 ```
 
 **Why the `tv-signal` mount (REQUIRED for TV-bias):** TV detection runs through
@@ -95,7 +95,7 @@ ensures the container can reach that address and keep an SSE stream open without
 interference.
 
 **Key delivery:** the key is read **only** from the `HUE_APPLICATION_KEY` environment
-variable — no code path in `hue_iac/` reads a mounted key file at runtime (the only
+variable — no code path in `hueman/` reads a mounted key file at runtime (the only
 `.hue-key` reference is the `auth` command printing an `export HUE_APPLICATION_KEY=...`
 line). The `-e HUE_APPLICATION_KEY="$(cat $HUE_IAC_HOME/.hue-key)"` flag has the **host
 shell** read the file and pass its contents as the env var; keep it exactly as shown.
@@ -139,11 +139,11 @@ first circadian scene applied.
 
 ## Step 4 — Trigger a manual circadian resume
 
-If the daemon is paused (e.g. you ran `hue-iac circadian pause` for debugging) and you
+If the daemon is paused (e.g. you ran `hueman circadian pause` for debugging) and you
 want to resume without restarting the container:
 
 ```sh
-docker exec hue-circadian hue-iac -c /data/hue.yaml circadian resume
+docker exec hue-circadian hueman -c /data/hue.yaml circadian resume
 ```
 
 ---
@@ -154,9 +154,9 @@ Same as Step 1: re-sync the source from your dev machine into `build/`, rebuild,
 recreate the container:
 
 ```sh
-# Mac: rsync hue_iac/ pyproject.toml Dockerfile into …/hue-iac/build/  (Step 1)
+# Mac: rsync hueman/ pyproject.toml Dockerfile into …/hueman/build/  (Step 1)
 # NAS:
-sudo /usr/local/bin/docker build -t hue-iac:latest /volume1/<share>/hue-iac/build
+sudo /usr/local/bin/docker build -t hueman:latest /volume1/<share>/hueman/build
 sudo /usr/local/bin/docker rm -f hue-circadian
 # Re-run the docker run command from Step 2
 ```
@@ -170,14 +170,14 @@ sudo /usr/local/bin/docker rm -f hue-circadian
 | Container exits immediately | Bad config / missing file mount | `docker logs hue-circadian` for the error |
 | SSE stream drops / reconnects | Bridge rebooted or LAN blip | Daemon auto-reconnects; monitor logs |
 | TLS pin mismatch | Bridge cert rotated | Refresh `.hue-pin.json` from your dev machine, restart container |
-| `BLOCKED` on scene apply | Zone or scene not found | Run `hue-iac plan` from your dev machine to diagnose |
+| `BLOCKED` on scene apply | Zone or scene not found | Run `hueman plan` from your dev machine to diagnose |
 
 ---
 
 ## Relationship to the re-anchor cron
 
-The daily `re-anchor.sh` cron (`README.md`) calls `hue-iac apply` once a day to keep
-the circadian smart-scene timed to the real sun. This Docker daemon runs `hue-iac
+The daily `re-anchor.sh` cron (`README.md`) calls `hueman apply` once a day to keep
+the circadian smart-scene timed to the real sun. This Docker daemon runs `hueman
 circadian run` continuously, reacting to SSE events in real time — it includes its own
 daily re-anchor logic. Once this daemon is confirmed stable, disable or delete
 the Task Scheduler job created in `README.md` to avoid double-applying.

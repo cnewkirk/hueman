@@ -4,11 +4,7 @@ Declarative, Terraform-style management of Philips Hue lighting — a sun-anchor
 circadian day cycle, TV-aware bias lighting, night motion guidance, a panic
 mode, and honoured manual overrides.
 
-> The CLI and Python package are currently named `hue-iac`; they will be renamed
-> to `hueman` in an upcoming release. Everywhere you see `hue-iac` below, that's
-> this project.
-
-You describe the desired state of your lights in a YAML file; `hue-iac` diffs it
+You describe the desired state of your lights in a YAML file; `hueman` diffs it
 against the bridge (`plan`), converges it (`apply`), and — for the behaviours a
 bridge can't run natively — ships a small resident **circadian daemon** that
 drives a zone smoothly along the solar curve, holds a TV-bias look while you
@@ -21,7 +17,7 @@ watch, and steps aside the moment you touch a dimmer. Built for the local
 flowchart LR
     yaml["hue.yaml<br/>(desired state)"]
 
-    subgraph cli["hue-iac"]
+    subgraph cli["hueman"]
         plan["plan / apply<br/>(diff + converge)"]
         daemon["circadian daemon<br/>(circadian run)"]
     end
@@ -77,15 +73,15 @@ timeline
 ## The commands
 
 ```
-hue-iac -c my-home.yaml validate         # parse + validate the config (no bridge needed)
-hue-iac -c my-home.yaml preview          # print the circadian colour curve for a day
-hue-iac -c my-home.yaml inventory        # list everything on your bridge, by name
-hue-iac -c my-home.yaml plan             # show what apply would change (read-only)
-hue-iac -c my-home.yaml apply            # converge the bridge to the declared state
-hue-iac -c my-home.yaml circadian run    # run the circadian + TV-bias daemon (foreground)
-hue-iac -c my-home.yaml circadian resume # clear a manual-override suspension out-of-band
-hue-iac -c my-home.yaml security on|off  # arm / disarm the panic show
-hue-iac -c my-home.yaml watch            # legacy live motion controller (see Limitations)
+hueman -c my-home.yaml validate         # parse + validate the config (no bridge needed)
+hueman -c my-home.yaml preview          # print the circadian colour curve for a day
+hueman -c my-home.yaml inventory        # list everything on your bridge, by name
+hueman -c my-home.yaml plan             # show what apply would change (read-only)
+hueman -c my-home.yaml apply            # converge the bridge to the declared state
+hueman -c my-home.yaml circadian run    # run the circadian + TV-bias daemon (foreground)
+hueman -c my-home.yaml circadian resume # clear a manual-override suspension out-of-band
+hueman -c my-home.yaml security on|off  # arm / disarm the panic show
+hueman -c my-home.yaml watch            # legacy live motion controller (see Limitations)
 ```
 
 `-c` defaults to `./hue.yaml` if you omit it.
@@ -94,11 +90,12 @@ hue-iac -c my-home.yaml watch            # legacy live motion controller (see Li
 
 ```bash
 git clone https://github.com/cnewkirk/hueman && cd hueman
-python3 -m pip install -e .          # installs the `hue-iac` console script
+python3 -m pip install -e .          # installs the `hueman` console script
 # contributors: python3 -m pip install -e ".[dev]" && python3 -m pytest
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+. A transitional `hue-iac` alias for the `hueman` command
+also installs (the project's former name); it will be removed in a future release.
 
 ## First-time setup
 
@@ -111,7 +108,7 @@ Requires Python 3.10+.
    `my-home.yaml` (or `export HUE_BRIDGE_HOST=...`).
 3. **Pair** — press the bridge's physical link button, then:
    ```bash
-   hue-iac -c my-home.yaml auth
+   hueman -c my-home.yaml auth
    ```
    It prints an application key. Keep it in an environment variable so it never
    lands in a file:
@@ -122,28 +119,28 @@ Requires Python 3.10+.
    areas by name, then edit `my-home.yaml`'s `areas:` (and light names
    throughout) to match your home:
    ```bash
-   hue-iac -c my-home.yaml inventory
+   hueman -c my-home.yaml inventory
    ```
 5. **Validate and preview** (no bridge writes):
    ```bash
-   hue-iac -c my-home.yaml validate
-   hue-iac -c my-home.yaml preview     # prints your circadian curve for today
+   hueman -c my-home.yaml validate
+   hueman -c my-home.yaml preview     # prints your circadian curve for today
    ```
 6. **Plan, then apply** — `plan` is read-only and shows exactly what `apply`
    would change; nothing touches the bridge until you apply:
    ```bash
-   hue-iac -c my-home.yaml plan
-   hue-iac -c my-home.yaml apply
+   hueman -c my-home.yaml plan
+   hueman -c my-home.yaml apply
    ```
 7. **Run the daemon** (foreground; use Docker/systemd to keep it up — a Synology
    Docker runbook lives in `deploy/synology/README-docker.md`):
    ```bash
-   hue-iac -c my-home.yaml circadian run
+   hueman -c my-home.yaml circadian run
    ```
 
 ## TLS
 
-The bridge serves a self-signed certificate. `hue-iac` defaults to
+The bridge serves a self-signed certificate. `hueman` defaults to
 `tls.mode: pin` — trust-on-first-use: it records the bridge certificate's
 SHA-256 fingerprint in `.hue-pin.json` on first connect and enforces it on
 **every** connection the session opens (including the long-lived event stream),
@@ -229,7 +226,7 @@ Key sections:
   `watch --dry-run` logs intended commands without sending them.
 - The daemon runs in the foreground; pair it with Docker (`--restart always`),
   `systemd`, or similar. On a manual override it suspends until a power-cycle of
-  the zone, `hue-iac circadian resume`, or the daily safety resume.
+  the zone, `hueman circadian resume`, or the daily safety resume.
 - Security mode's chaos runs over the REST API, which rate-limits under load —
   the show degrades gracefully (the daemon logs drop stats). True per-frame
   control would need the Entertainment streaming API.
@@ -260,7 +257,7 @@ unit-tested; the network surface is thin and replaceable.
 | `pin.py` | Trust-on-first-use TLS certificate pinning |
 | `circadian_daemon.py` | The resident daemon: curve ticks, SSE events, TV-bias triggers, security show |
 | `watch.py` | Legacy live runtime: bridge event stream → `PolicyEngine` → commands |
-| `cli.py` | The `hue-iac` command-line interface |
+| `cli.py` | The `hueman` command-line interface |
 
 </details>
 

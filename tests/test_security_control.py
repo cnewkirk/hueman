@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from hue_iac.config import Config
-from hue_iac.security_control import (
+from hueman.config import Config
+from hueman.security_control import (
     PHASE_ALERT,
     PHASE_CHAOS,
     SecurityController,

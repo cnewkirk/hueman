@@ -4,7 +4,7 @@ Given an injected ``now`` (epoch seconds) and external/resume events, decides th
 action for this tick — drive the zone to the current curve point, fade it off at
 hand-off, or hold — and tracks the daemon mode. Time and events are explicit
 arguments so the whole state machine is unit-tested without a bridge, mirroring
-:class:`hue_iac.engine.PolicyEngine`.
+:class:`hueman.engine.PolicyEngine`.
 """
 from __future__ import annotations
 

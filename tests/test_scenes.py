@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from hue_iac.config import Color, Config, LightState
-from hue_iac.errors import ConfigError
-from hue_iac.reconcile import ChangeType, Planner, SceneReconciler
-from hue_iac.state import BridgeState
+from hueman.config import Color, Config, LightState
+from hueman.errors import ConfigError
+from hueman.reconcile import ChangeType, Planner, SceneReconciler
+from hueman.state import BridgeState
 
 
 def _doc(scenes):

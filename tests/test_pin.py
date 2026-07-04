@@ -10,8 +10,8 @@ import json
 
 import pytest
 
-from hue_iac import pin
-from hue_iac.errors import PinError
+from hueman import pin
+from hueman.errors import PinError
 
 FP_A = "a" * 64
 FP_B = "b" * 64

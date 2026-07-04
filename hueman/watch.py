@@ -14,7 +14,7 @@
 ``plan``/``apply`` provision the declarative surface; this module is the live
 controller. It subscribes to the CLIP v2 Server-Sent Events stream
 (``/eventstream/clip/v2``), feeds motion, light-level and manual-control events
-into the per-area :class:`~hue_iac.engine.PolicyEngine` instances, and writes the
+into the per-area :class:`~hueman.engine.PolicyEngine` instances, and writes the
 resulting commands back to the relevant ``grouped_light`` services.
 
 Manual-override detection is a trust heuristic: every command we send is
@@ -25,7 +25,7 @@ automation for the policy's override window.
 
 This is the one module that genuinely needs the hardware to exercise end to end,
 so its decision logic is delegated to the pure, tested engine and its
-serialisation to the pure, tested :mod:`hue_iac.payload`; what remains here is
+serialisation to the pure, tested :mod:`hueman.payload`; what remains here is
 event plumbing.
 """
 
@@ -48,7 +48,7 @@ from .errors import AuthError, BridgeError
 from .payload import GroupedLightCommand
 from .state import BridgeState
 
-_LOG = logging.getLogger("hue_iac.watch")
+_LOG = logging.getLogger("hueman.watch")
 
 #: How long a command we issued stays in the echo buffer before a matching
 #: bridge event is assumed to be a human action instead of our own write.
@@ -107,7 +107,7 @@ class HueEventStream:
             if response.status_code in (401, 403):
                 raise AuthError(
                     f"bridge rejected the application key (HTTP {response.status_code}); "
-                    "re-run 'hue-iac auth'"
+                    "re-run 'hueman auth'"
                 )
             response.raise_for_status()  # other 4xx/5xx -> retryable HTTPError
             for line in response.iter_lines(decode_unicode=True):
@@ -143,7 +143,7 @@ class MotionController:
 
     Args:
         client: An authenticated bridge client.
-        state: A loaded :class:`~hue_iac.state.BridgeState`.
+        state: A loaded :class:`~hueman.state.BridgeState`.
         config: The parsed IaC configuration.
         clock: Callable returning epoch seconds; injectable for testing.
         dry_run: When ``True``, log actions instead of writing to the bridge.

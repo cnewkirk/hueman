@@ -6,7 +6,7 @@ import datetime as _dt
 
 import pytest
 
-from hue_iac.sun import SolarCalculator, zone_offset_hours
+from hueman.sun import SolarCalculator, zone_offset_hours
 
 
 def test_summer_solstice_nyc_sunrise_sunset_reasonable() -> None:

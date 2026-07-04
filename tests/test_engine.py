@@ -7,7 +7,7 @@ nightlight standby, the lux gate, and honoured manual overrides.
 
 from __future__ import annotations
 
-from hue_iac.engine import Phase, PolicyEngine
+from hueman.engine import Phase, PolicyEngine
 from tests.conftest import epoch_at, make_config
 
 LOCATION = (40.7128, -74.0060, -5.0)

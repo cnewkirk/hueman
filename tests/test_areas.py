@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from hue_iac.config import Config
-from hue_iac.errors import ConfigError
-from hue_iac.reconcile import AreaReconciler, ChangeType
-from hue_iac.state import BridgeState
+from hueman.config import Config
+from hueman.errors import ConfigError
+from hueman.reconcile import AreaReconciler, ChangeType
+from hueman.state import BridgeState
 
 
 class FakeClient:

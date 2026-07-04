@@ -1,24 +1,24 @@
 # ---------------------------------------------------------------------------
-# hue-iac example configuration
+# hueman example configuration
 #
 # Copy this file (`cp examples/home.yaml my-home.yaml`), point bridge.host at
 # your bridge, and replace the light/room/zone names with yours — run
-# `hue-iac -c my-home.yaml inventory` to see what your bridge actually has.
+# `hueman -c my-home.yaml inventory` to see what your bridge actually has.
 #
 # Declarative desired state for a Hue bridge (CLIP v2; night_motion needs a
 # Bridge Pro running MotionAware). Then:
-#   hue-iac -c my-home.yaml validate       # check syntax (no bridge needed)
-#   hue-iac -c my-home.yaml preview        # see the circadian curve
-#   hue-iac -c my-home.yaml plan           # diff against the bridge (read-only)
-#   hue-iac -c my-home.yaml apply          # provision areas/scenes/night-red
-#   hue-iac -c my-home.yaml circadian run  # run the circadian + TV-bias daemon
-#   hue-iac -c my-home.yaml watch          # legacy motion controller
+#   hueman -c my-home.yaml validate       # check syntax (no bridge needed)
+#   hueman -c my-home.yaml preview        # see the circadian curve
+#   hueman -c my-home.yaml plan           # diff against the bridge (read-only)
+#   hueman -c my-home.yaml apply          # provision areas/scenes/night-red
+#   hueman -c my-home.yaml circadian run  # run the circadian + TV-bias daemon
+#   hueman -c my-home.yaml watch          # legacy motion controller
 # ---------------------------------------------------------------------------
 
 bridge:
   host: 192.0.2.2                # or set $HUE_BRIDGE_HOST and omit this
   # The application key is read from $HUE_APPLICATION_KEY by default so it
-  # never lives in version control. Run `hue-iac auth` to create one.
+  # never lives in version control. Run `hueman auth` to create one.
   application_key_env: HUE_APPLICATION_KEY
   tls:
     mode: pin                        # pin (trust-on-first-use) | cacert | insecure
@@ -71,7 +71,7 @@ circadian:
   ramp_minutes: 90                   # smooth 90-min dawn/dusk transitions
 
 # ---------------------------------------------------------------------------
-# The circadian daemon (`hue-iac circadian run`) — the resident runtime.
+# The circadian daemon (`hueman circadian run`) — the resident runtime.
 # Drives one zone smoothly along the solar curve from `start` to `hand_off`,
 # steps back when it detects a manual override (settle-and-compare), and holds
 # a TV-bias look on the viewing lights while the TV is on.
@@ -85,7 +85,7 @@ circadian_daemon:
   fade_off: 90s                      # the hand-off fade to dark
   manual_override:
     detect: true
-    control_file: .hue-circadian-resume   # `hue-iac circadian resume` touches this
+    control_file: .hue-circadian-resume   # `hueman circadian resume` touches this
     resume_on_power_cycle: true
     daily_safety_resume: true
   # TV-aware bias hold: while the TV is on, each light below holds its `look`;

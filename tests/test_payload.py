@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from hue_iac.engine import TargetState
-from hue_iac.payload import ColorConverter, GroupedLightCommand
+from hueman.engine import TargetState
+from hueman.payload import ColorConverter, GroupedLightCommand
 
 
 def test_red_hex_maps_to_red_corner_of_gamut() -> None:
@@ -61,7 +61,7 @@ def test_build_without_transition_unchanged() -> None:
 
 def test_light_command_matches_grouped_body() -> None:
     """Per-light writes reuse the same body shape as grouped_light."""
-    from hue_iac.payload import LightCommand
+    from hueman.payload import LightCommand
 
     t = TargetState(on=True, brightness=28.0, mirek=153, hex=None)
     assert LightCommand.build(t, transition_ms=500) == GroupedLightCommand.build(t, transition_ms=500)
@@ -74,7 +74,7 @@ def test_light_command_matches_grouped_body() -> None:
 
 
 def test_light_command_hex_and_off() -> None:
-    from hue_iac.payload import LightCommand
+    from hueman.payload import LightCommand
 
     assert "color" in LightCommand.build(TargetState(on=True, brightness=5.0, hex="1a0a00"))
     assert LightCommand.build(TargetState.off(), transition_ms=90000) == {

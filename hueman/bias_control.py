@@ -1,10 +1,10 @@
 """Pure decision core for the daemon's TV bias hold (no clock, no I/O).
 
-Given the parsed :class:`~hue_iac.config.BiasSpec`, whether the TV is on, and the
+Given the parsed :class:`~hueman.config.BiasSpec`, whether the TV is on, and the
 current circadian curve sample, :func:`bias_actions` decides the per-light action
 for this tick. :class:`TriggerAggregator` folds on/off edges from the (I/O)
 trigger sources into a single ``tv_on`` signal with optional debounce. This
-mirrors the pure/I-O split of :mod:`hue_iac.circadian_control`: everything here is
+mirrors the pure/I-O split of :mod:`hueman.circadian_control`: everything here is
 a pure function of explicit inputs, so it is fully unit-tested without a bridge.
 """
 

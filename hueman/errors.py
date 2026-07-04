@@ -1,4 +1,4 @@
-"""Exception hierarchy for hue-iac.
+"""Exception hierarchy for hueman.
 
 Everything user-facing inherits from :class:`HueIacError` so the CLI can catch a
 single type, print a clean message, and exit non-zero without a traceback.

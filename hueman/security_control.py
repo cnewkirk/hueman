@@ -1,6 +1,6 @@
 """Pure decision core for the daemon's security mode (no clock, no I/O).
 
-Given the parsed :class:`~hue_iac.config.SecuritySpec` and an injected elapsed
+Given the parsed :class:`~hueman.config.SecuritySpec` and an injected elapsed
 time + frame index, decides the light frame for an escalating ALERT -> CHAOS
 show. The safety cap is **luminance-only**: a unit's brightness changes no
 faster than ``min_flash_interval`` (out of the 3-30 Hz photosensitive-seizure
@@ -10,8 +10,8 @@ controller is built with the member ``lights``, chaos drives individual lights
 in a rotating budget (``lights_per_frame``) instead of whole groups, so the
 apartment churns as a decorrelated patchwork. The ALERT phase stays whole-group
 and legible. Everything here is a pure function of explicit inputs, so it is
-fully unit-tested without a bridge, mirroring :mod:`hue_iac.bias_control` and
-:mod:`hue_iac.circadian_control`.
+fully unit-tested without a bridge, mirroring :mod:`hueman.bias_control` and
+:mod:`hueman.circadian_control`.
 """
 
 from __future__ import annotations

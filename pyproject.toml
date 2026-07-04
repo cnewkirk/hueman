@@ -3,12 +3,12 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hue-iac"
+name = "hueman"
 version = "0.1.0"
 description = "Declarative, Terraform-style management of Philips Hue lighting policies with circadian, motion and timing optimisation."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
     "requests>=2.28",
     "PyYAML>=6.0",
@@ -21,10 +21,11 @@ dev = [
 ]
 
 [project.scripts]
-hue-iac = "hue_iac.cli:main"
+hueman = "hueman.cli:main"
+hue-iac = "hueman.cli:main"   # transitional alias, remove after one release
 
 [tool.setuptools.packages.find]
-include = ["hue_iac*"]
+include = ["hueman*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

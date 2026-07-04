@@ -106,7 +106,7 @@ class BridgeState:
     """Loads and indexes the bridge resources the tool operates on.
 
     Args:
-        client: An authenticated :class:`~hue_iac.client.HueClient`.
+        client: An authenticated :class:`~hueman.client.HueClient`.
     """
 
     def __init__(self, client: HueClient) -> None:

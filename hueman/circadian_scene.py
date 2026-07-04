@@ -1,9 +1,9 @@
 """Pure generator for the smooth-circadian smart scene.
 
-Samples the sun-elevation circadian curve (:mod:`hue_iac.circadian`) at a handful
+Samples the sun-elevation circadian curve (:mod:`hueman.circadian`) at a handful
 of afternoon-weighted *knee* times so a native ``smart_scene`` — capped by the
 bridge at six timeslots — can fade continuously through the day instead of
-snapping between a few hand-built looks. I/O-free: :mod:`hue_iac.reconcile`
+snapping between a few hand-built looks. I/O-free: :mod:`hueman.reconcile`
 owns the bridge writes.
 
 Knees are weighted toward the afternoon decline: sunrise, solar noon, two

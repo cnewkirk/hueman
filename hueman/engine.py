@@ -3,7 +3,7 @@
 This is the brain that turns sensor events into light commands. It is kept free
 of any I/O: it consumes already-classified events (motion, ambient light level,
 a manual-override signal, and clock ticks) and emits :class:`Action` values that
-the runtime (:mod:`hue_iac.watch`) executes against the bridge. Time is passed
+the runtime (:mod:`hueman.watch`) executes against the bridge. Time is passed
 in as an explicit epoch-seconds float so tests drive it directly.
 
 Why a custom engine instead of the bridge's built-in motion behaviour? Three of
@@ -150,7 +150,7 @@ class PolicyEngine:
             ts: Epoch seconds of the moment to evaluate.
 
         Returns:
-            The :class:`~hue_iac.config.Timeslot` currently in effect.
+            The :class:`~hueman.config.Timeslot` currently in effect.
         """
         sun = self._sun_for(self._local_dt(ts).date())
         now = self._minute_of_day(ts)
