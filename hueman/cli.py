@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import sys
+from collections.abc import Callable
 
 from . import __version__
 from .client import HueClient
@@ -45,6 +46,7 @@ class Cli:
     """Parses arguments and dispatches to subcommand handlers."""
 
     def __init__(self) -> None:
+        """Build the argument parser once so ``run`` can be called repeatedly."""
         self._parser = self._build_parser()
 
     def _build_parser(self) -> argparse.ArgumentParser:
@@ -102,7 +104,8 @@ class Cli:
             A process exit code.
         """
         args = self._parser.parse_args(argv)
-        handler = getattr(self, f"_cmd_{args.command}")
+        # getattr returns Any; the declared type restores checking of the call.
+        handler: Callable[[argparse.Namespace], int] = getattr(self, f"_cmd_{args.command}")
         try:
             return handler(args)
         except HueIacError as error:
@@ -295,11 +298,12 @@ class Cli:
         areas = state.motion_areas
         print(f"\nMotionAware areas — bulb-grid sensing ({len(areas)}):")
         for area in sorted(areas, key=lambda a: a.name):
-            room = area.room_name or "?"
+            # `room` above is bound to a Group by the rooms loop; use a fresh name.
+            area_room = area.room_name or "?"
             sens = f"{area.sensitivity}/{area.sensitivity_max}" if area.sensitivity is not None else "?"
             now = "MOTION" if area.motion else "clear"
             print(
-                f"  - {area.name}  [room: {room}; {area.participant_count} bulbs; "
+                f"  - {area.name}  [room: {area_room}; {area.participant_count} bulbs; "
                 f"sensitivity {sens}; now: {now}]"
             )
 

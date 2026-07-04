@@ -26,7 +26,11 @@ def zone_offset_hours(tz_name: str, date: _dt.date) -> float:
     transition. Lighting only needs the day's offset, so this is exact here.
     """
     noon = _dt.datetime(date.year, date.month, date.day, 12)
-    return ZoneInfo(tz_name).utcoffset(noon).total_seconds() / 3600.0
+    offset = ZoneInfo(tz_name).utcoffset(noon)
+    # tzinfo.utcoffset is Optional only for abstract/naive cases; ZoneInfo
+    # always resolves a concrete datetime to a real offset.
+    assert offset is not None
+    return offset.total_seconds() / 3600.0
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class SolarCalculator:
     def __init__(
         self, lat: float, lon: float, tz_offset_hours: float, tz: str | None = None
     ) -> None:
+        """Store the location; see the class docstring for argument semantics."""
         self._lat = lat
         self._lon = lon
         self._tz_offset_hours = tz_offset_hours

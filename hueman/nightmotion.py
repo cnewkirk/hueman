@@ -12,6 +12,7 @@ produces request bodies from inputs.
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 from .payload import ColorConverter
 
@@ -26,7 +27,7 @@ def scene_body(
     brightness: float = 0.0,
     on: bool = True,
     group_rtype: str = "zone",
-) -> dict:
+) -> dict[str, Any]:
     """Build a CLIP ``scene`` body for ``group_rid`` setting every light alike.
 
     When ``on`` is true, exactly one of ``mirek`` (white colour temperature) or
@@ -37,6 +38,7 @@ def scene_body(
     ``night_motion`` at bedtime without leaving a competing on-step in the night
     window.
     """
+    colour: dict[str, Any]
     if hex is not None:
         x, y = ColorConverter.hex_to_xy(hex)
         colour = {"color": {"xy": {"x": x, "y": y}}}
@@ -46,6 +48,7 @@ def scene_body(
         colour = {}
     actions = []
     for rid in light_rids:
+        action: dict[str, Any]
         if on:
             action = {"on": {"on": True}, "dimming": {"brightness": round(float(brightness), 1)}}
             action.update(colour)
@@ -59,7 +62,7 @@ def scene_body(
     }
 
 
-def _colour_kind(action: dict) -> tuple:
+def _colour_kind(action: dict[str, Any]) -> tuple[Any, ...]:
     """Return a comparable colour signature for a scene action.
 
     ``("xy", x, y)`` for an sRGB/CIE colour, ``("ct", mirek)`` for a white
@@ -78,8 +81,8 @@ def _colour_kind(action: dict) -> tuple:
 
 
 def scene_actions_match(
-    live_actions: list[dict],
-    desired_actions: list[dict],
+    live_actions: list[dict[str, Any]],
+    desired_actions: list[dict[str, Any]],
     *,
     bri_tol: float = 0.5,
     xy_tol: float = 1e-3,
@@ -123,7 +126,7 @@ def scene_actions_match(
     return True
 
 
-def _start_minute(slot: dict) -> int:
+def _start_minute(slot: dict[str, Any]) -> int:
     """Clock minute of a timeslot's start; raises ValueError for sun-anchored slots.
 
     MotionAware timeslots may be anchored to sunrise/sunset instead of a clock
@@ -138,11 +141,13 @@ def _start_minute(slot: dict) -> int:
             f"sun-anchored timeslot (start_time type {start.get('type')!r}) is not "
             "supported; re-anchor it to a clock time in the Hue app first"
         )
-    return t["hour"] * 60 + t.get("minute", 0)
+    hour: int = t["hour"]
+    minute: int = t.get("minute", 0)
+    return hour * 60 + minute
 
 
 def transform_automation(
-    config: dict,
+    config: dict[str, Any],
     *,
     zone_rid: str,
     day_scene: str,
@@ -152,7 +157,7 @@ def transform_automation(
     night_off_min: int = 3,
     day_start: tuple[int, int] = (8, 0),
     night_only: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Return ``config`` retargeted to a single zone with a red night timeslot.
 
     A MotionAware automation's response target (``where``) is global across all
@@ -205,7 +210,8 @@ def transform_automation(
         motion["when"]["timeslots"] = [night_slot]
         slots = motion["when"]["timeslots"]
 
-    def recall(scene_rid: str) -> list[dict]:
+    def recall(scene_rid: str) -> list[dict[str, Any]]:
+        """Build the one-element ``recall_single`` action list for ``scene_rid``."""
         return [{"action": {"recall": {"rid": scene_rid, "rtype": "scene"}}}]
 
     for s in slots:

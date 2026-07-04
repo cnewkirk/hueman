@@ -36,8 +36,9 @@ import logging
 import random
 import threading
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Iterator
+from typing import Any
 
 import requests
 
@@ -73,7 +74,7 @@ class BridgeEvent:
 
     rtype: str
     rid: str
-    data: dict
+    data: dict[str, Any]
 
 
 class HueEventStream:
@@ -84,6 +85,7 @@ class HueEventStream:
     """
 
     def __init__(self, client: HueClient) -> None:
+        """Store the bridge client whose session and key the stream reuses."""
         self._client = client
 
     def events(self) -> Iterator[BridgeEvent]:
@@ -162,6 +164,7 @@ class MotionController:
         backoff_initial: float = 1.0,
         backoff_max: float = 30.0,
     ) -> None:
+        """Wire up engines and routing tables; see the class docstring for args."""
         self._client = client
         self._state = state
         self._config = config

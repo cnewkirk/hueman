@@ -94,6 +94,7 @@ class CircadianCurve:
     """
 
     def __init__(self, params: CircadianParams = CircadianParams()) -> None:
+        """Store the anchor parameters the curve interpolates between."""
         self._params = params
 
     @property

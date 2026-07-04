@@ -39,7 +39,8 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
+from typing import cast
 
 import requests
 
@@ -80,6 +81,16 @@ class CircadianDaemon:
             :class:`~hueman.watch.HueEventStream` over ``client``.
     """
 
+    # Attributes assigned on both construction paths (``__init__`` and
+    # ``_setup``); annotated once here so the two assignment sites agree.
+    _bias_sse_on_rid: str | None
+    _bias_sse_off_rid: str | None
+    _bias_rids: dict[str, str]
+    _security_sse_on_rid: str | None
+    _security_sse_off_rid: str | None
+    _security_rids: dict[str, str]
+    _security_light_rids: tuple[str, ...]
+
     def __init__(
         self,
         client: HueClient,
@@ -90,6 +101,7 @@ class CircadianDaemon:
         sleep: Callable[[float], None] = time.sleep,
         stream_factory: Callable[[], "HueEventStream"] | None = None,
     ) -> None:
+        """Resolve bridge rids from ``state``, validate the config, and wire up."""
         spec = self._require_spec(config)
         rid = state.group(spec.zone).grouped_light_rid
         if rid is None:
@@ -124,7 +136,13 @@ class CircadianDaemon:
                 )
             if len(sec.groups) < 2:
                 _LOG.warning("security.groups has <2 groups; chaos zone alternation is disabled")
-            self._security_rids = {g: state.group(g).grouped_light_rid for g in sec.groups}
+            # The ``no_gl`` raise above guarantees every group has a rid; the
+            # walrus filter just narrows ``str | None`` -> ``str`` for the checker.
+            self._security_rids = {
+                g: gl_rid
+                for g in sec.groups
+                if (gl_rid := state.group(g).grouped_light_rid) is not None
+            }
             # Member-light rids across the security groups: chaos drives these
             # individually (decorrelated patchwork) instead of two group blobs.
             seen: set[str] = set()
@@ -163,7 +181,7 @@ class CircadianDaemon:
         self,
         client: HueClient,
         config: Config,
-        rid: str | None,
+        rid: str,
         *,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
@@ -208,9 +226,9 @@ class CircadianDaemon:
         self._bias_aggregator = TriggerAggregator(
             debounce_ms=(bias.probe_debounce_ms if (bias and bias.probe_enabled) else 0)
         )
-        self._bias_sse_on_rid: str | None = None    # resolved in __init__ (needs BridgeState)
-        self._bias_sse_off_rid: str | None = None
-        self._bias_rids: dict[str, str] = {}        # bias light name -> light_rid
+        self._bias_sse_on_rid = None                # resolved in __init__ (needs BridgeState)
+        self._bias_sse_off_rid = None
+        self._bias_rids = {}                        # bias light name -> light_rid
         self._bias_probe_thread: threading.Thread | None = None
         self._bias_file_thread: threading.Thread | None = None
         # Last committed tv_on we successfully drove the bias set to. Lets the
@@ -232,10 +250,10 @@ class CircadianDaemon:
         # Read/written without the lock intentionally: benign under the GIL, self-corrects within one tick.
         self._security_active = False
         self._security_last_phase: str | None = None
-        self._security_sse_on_rid: str | None = None
-        self._security_sse_off_rid: str | None = None
-        self._security_rids: dict[str, str] = {}      # group name -> grouped_light rid
-        self._security_light_rids: tuple[str, ...] = ()   # member lights (chaos units)
+        self._security_sse_on_rid = None
+        self._security_sse_off_rid = None
+        self._security_rids = {}                      # group name -> grouped_light rid
+        self._security_light_rids = ()                # member lights (chaos units)
         self._security_thread: threading.Thread | None = None
 
     def _rebuild_security_controller(self) -> None:
@@ -267,7 +285,9 @@ class CircadianDaemon:
             return None
         scene = state.scene(resume_trigger)
         if scene is not None and "id" in scene:
-            return scene["id"]
+            # CLIP resource ids are always strings; the cast only informs the
+            # checker (the raw payload is dict[str, Any]).
+            return cast(str, scene["id"])
         return resume_trigger
 
     def _configure_logging(self, spec: CircadianDaemonSpec) -> None:
@@ -469,6 +489,9 @@ class CircadianDaemon:
         writes are suppressed once the off has landed — re-PUTing off to the
         whole viewing set every tick, all night, is pure queue pressure.
         """
+        bias = self._bias
+        if bias is None:
+            return  # callers guard on spec.bias; narrowing for the type checker
         in_window = self._controller.in_window(now)
         curve = self._controller.drive_to(now) if in_window else None
         tv_on = self._bias_aggregator.tv_on(now)
@@ -479,12 +502,12 @@ class CircadianDaemon:
                 "bias: TV %s (%s) -> %d lights, %.1fs edge fade",
                 "on" if tv_on else "off",
                 self._bias_aggregator.last_source or "startup",
-                len(self._bias.lights),
-                self._bias.transition_ms / 1000,
+                len(bias.lights),
+                bias.transition_ms / 1000,
             )
         all_ok = True
         for action in bias_actions(
-            self._bias, tv_on=tv_on, in_window=in_window, curve=curve,
+            bias, tv_on=tv_on, in_window=in_window, curve=curve,
             transition_ms=self._spec.transition_ms, fade_off_ms=self._spec.fade_off_ms,
             edge=edge,
         ):
@@ -651,6 +674,7 @@ class CircadianDaemon:
                         self._security_last_phase = frame.phase
                     futures = []
                     for ft in frame.targets:
+                        rid: str | None
                         if ft.kind == "light":
                             rid, rtype = ft.name, "light"     # chaos units ARE light rids
                         else:

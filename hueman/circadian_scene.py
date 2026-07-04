@@ -14,6 +14,7 @@ curve as a continuous gradient.
 
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
 
 from .circadian import CircadianCurve, CircadianParams
@@ -41,7 +42,7 @@ class CircadianStep:
 def circadian_timeslots(
     params: CircadianParams,
     solar: SolarCalculator,
-    date,
+    date: _dt.date,
     *,
     hand_off_min: int,
 ) -> list[CircadianStep]:
