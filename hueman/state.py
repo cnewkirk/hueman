@@ -10,6 +10,7 @@ raw API payloads.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .client import HueClient
 from .errors import ConfigError
@@ -110,16 +111,17 @@ class BridgeState:
     """
 
     def __init__(self, client: HueClient) -> None:
+        """Create an empty (unloaded) state bound to ``client``."""
         self._client = client
         self._groups_by_name: dict[str, Group] = {}
         self._sensors_by_name: dict[str, MotionSensor] = {}
-        self._scenes_by_name: dict[str, dict] = {}
+        self._scenes_by_name: dict[str, dict[str, Any]] = {}
         self._lights_by_name: dict[str, LightRef] = {}
         self._device_name_by_rid: dict[str, str] = {}
         self._motion_areas: list[MotionArea] = []
-        self._smart_scenes_by_name: dict[str, dict] = {}
+        self._smart_scenes_by_name: dict[str, dict[str, Any]] = {}
         self._scene_name_by_rid: dict[str, str] = {}
-        self._behavior_instances_by_name: dict[str, dict] = {}
+        self._behavior_instances_by_name: dict[str, dict[str, Any]] = {}
         self._loaded = False
 
     def load(self) -> "BridgeState":
@@ -141,7 +143,7 @@ class BridgeState:
         return self
 
     # -- indexing helpers --------------------------------------------------- #
-    def _index_device_lights(self, devices: list[dict]) -> dict[str, str]:
+    def _index_device_lights(self, devices: list[dict[str, Any]]) -> dict[str, str]:
         """Map each device id to its light-service id (if it owns one)."""
         device_to_light: dict[str, str] = {}
         for device in devices:
@@ -180,7 +182,7 @@ class BridgeState:
 
     def _index_lights(
         self,
-        devices: list[dict],
+        devices: list[dict[str, Any]],
         device_to_light: dict[str, str],
         device_room: dict[str, str],
     ) -> None:
@@ -200,7 +202,7 @@ class BridgeState:
 
     @staticmethod
     def _resolve_group_members(
-        group: dict, rtype: str, device_to_light: dict[str, str]
+        group: dict[str, Any], rtype: str, device_to_light: dict[str, str]
     ) -> tuple[list[str], list[str], list[str]]:
         """Return ``(light_service_ids, device_ids, light_device_ids)`` for ``group``.
 
@@ -224,7 +226,7 @@ class BridgeState:
                 lights.append(child["rid"])
         return lights, device_rids, light_device_rids
 
-    def _index_sensors(self, devices: list[dict]) -> None:
+    def _index_sensors(self, devices: list[dict[str, Any]]) -> None:
         """Build the motion-sensor index keyed by device name."""
         for device in devices:
             motion_rid: str | None = None
@@ -247,10 +249,10 @@ class BridgeState:
         ``security_area_motion`` services rather than on a device ``motion``
         service, so the legacy sensor index never sees it.
         """
-        services: dict[str, dict] = {}
+        services: dict[str, dict[str, Any]] = {}
         for rtype in ("convenience_area_motion", "security_area_motion"):
-            for service in self._client.get_resources(rtype):
-                services[service["id"]] = service
+            for svc in self._client.get_resources(rtype):
+                services[svc["id"]] = svc
         room_name_by_rid = {group.rid: group.name for group in self._groups_by_name.values()}
 
         for cfg in self._client.get_resources("motion_area_configuration"):
@@ -317,7 +319,7 @@ class BridgeState:
         """Return the room/zone named ``name`` or ``None`` if it does not exist."""
         return self._groups_by_name.get(name)
 
-    def scene(self, name: str) -> dict | None:
+    def scene(self, name: str) -> dict[str, Any] | None:
         """Return the raw scene payload named ``name``, or ``None``."""
         return self._scenes_by_name.get(name)
 
@@ -325,11 +327,11 @@ class BridgeState:
         """Return the scene name for a scene resource id, or ``None``."""
         return self._scene_name_by_rid.get(rid)
 
-    def smart_scene(self, name: str) -> dict | None:
+    def smart_scene(self, name: str) -> dict[str, Any] | None:
         """Return the raw smart-scene payload named ``name``, or ``None``."""
         return self._smart_scenes_by_name.get(name)
 
-    def behavior_instance(self, name: str) -> dict | None:
+    def behavior_instance(self, name: str) -> dict[str, Any] | None:
         """Return the raw behavior_instance (native automation) named ``name``."""
         return self._behavior_instances_by_name.get(name)
 
@@ -374,6 +376,6 @@ class BridgeState:
         return tuple(self._motion_areas)
 
     @property
-    def smart_scenes(self) -> tuple[dict, ...]:
+    def smart_scenes(self) -> tuple[dict[str, Any], ...]:
         """Return every indexed smart-scene payload."""
         return tuple(self._smart_scenes_by_name.values())

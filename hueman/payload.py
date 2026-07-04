@@ -8,6 +8,8 @@ unit-testable without a bridge.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .engine import TargetState
 
 
@@ -18,7 +20,8 @@ class ColorConverter:
     def _linearize(channel: float) -> float:
         """Apply inverse sRGB companding to a 0-1 channel value."""
         if channel > 0.04045:
-            return ((channel + 0.055) / 1.055) ** 2.4
+            linearized: float = ((channel + 0.055) / 1.055) ** 2.4
+            return linearized
         return channel / 12.92
 
     @classmethod
@@ -51,7 +54,7 @@ class ColorConverter:
         return (round(big_x / total, 4), round(big_y / total, 4))
 
 
-def _target_body(target: TargetState, transition_ms: int | None = None) -> dict:
+def _target_body(target: TargetState, transition_ms: int | None = None) -> dict[str, Any]:
     """Build the CLIP on/dimming/colour body for ``target``.
 
     Resource-agnostic: the same body shape applies to ``grouped_light`` and
@@ -60,7 +63,7 @@ def _target_body(target: TargetState, transition_ms: int | None = None) -> dict:
     continuous transitions, including fade-to-off).
     """
     if not target.on:
-        body: dict = {"on": {"on": False}}
+        body: dict[str, Any] = {"on": {"on": False}}
         if transition_ms is not None:
             body["dynamics"] = {"duration": transition_ms}
         return body
@@ -82,7 +85,7 @@ class GroupedLightCommand:
     """Builds a ``grouped_light`` PUT body from an engine target state."""
 
     @staticmethod
-    def build(target: TargetState, transition_ms: int | None = None) -> dict:
+    def build(target: TargetState, transition_ms: int | None = None) -> dict[str, Any]:
         """Return the CLIP body to PUT to ``/clip/v2/resource/grouped_light/<id>``."""
         return _target_body(target, transition_ms)
 
@@ -95,6 +98,6 @@ class LightCommand:
     """
 
     @staticmethod
-    def build(target: TargetState, transition_ms: int | None = None) -> dict:
+    def build(target: TargetState, transition_ms: int | None = None) -> dict[str, Any]:
         """Return the CLIP body to PUT to ``/clip/v2/resource/light/<id>``."""
         return _target_body(target, transition_ms)

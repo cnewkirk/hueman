@@ -31,6 +31,8 @@ from .sun import SolarCalculator, SunTimes
 
 
 class Phase(Enum):
+    """Lifecycle state of one controlled area's automation."""
+
     STANDBY = "standby"        # no motion; lights off or at nightlight state
     ACTIVE = "active"          # motion seen recently; lights at on-motion state
     DIMMING = "dimming"        # warning dim before turning off
@@ -48,6 +50,7 @@ class TargetState:
 
     @classmethod
     def off(cls) -> "TargetState":
+        """Return the canonical all-off command."""
         return cls(on=False)
 
 
@@ -104,6 +107,7 @@ class PolicyEngine:
         location: tuple[float, float, float],
         circadian: CircadianParams = CircadianParams(),
     ) -> None:
+        """Initialise per-area runtimes and the solar/circadian helpers."""
         self.policy = policy
         latitude, longitude, tz_offset_hours = location
         self._tz_offset_hours = tz_offset_hours
@@ -127,10 +131,16 @@ class PolicyEngine:
         return self._sun_cache[day]
 
     def _minute_of_day(self, ts: float) -> float:
+        """Return ``ts`` as fractional local minutes after midnight."""
         d = self._local_dt(ts)
         return d.hour * 60 + d.minute + d.second / 60.0
 
     def _resolve_time_ref(self, ref: str, sun: SunTimes) -> float:
+        """Resolve a slot start (``"sunrise"``, ``"sunset"`` or ``"HH:MM"``) to minutes.
+
+        Polar-day sentinels are clamped to the day's edges so every slot still
+        gets a finite, sortable start minute.
+        """
         if ref == "sunrise":
             return sun.sunrise_min if not sun.is_polar_day else 0.0
         if ref == "sunset":
@@ -167,6 +177,12 @@ class PolicyEngine:
 
     # -- colour resolution -------------------------------------------------- #
     def _resolve(self, st: LightState, ts: float) -> TargetState:
+        """Resolve a configured :class:`LightState` into a concrete command at ``ts``.
+
+        ``circadian`` colour is recomputed from the live sun position (and may
+        also supply the brightness when the config leaves it unset); ``ct`` and
+        ``xy`` pass through as fixed mirek/hex values.
+        """
         if not st.on:
             return TargetState.off()
         bri = st.brightness
@@ -188,6 +204,7 @@ class PolicyEngine:
         return TargetState(on=True, brightness=bri, mirek=mirek, hex=hexv)
 
     def _standby_target(self, slot: Timeslot, ts: float) -> TargetState:
+        """Return the slot's standby command — off unless a nightlight is configured."""
         if slot.standby is None:
             return TargetState.off()
         return self._resolve(slot.standby, ts)
@@ -315,6 +332,10 @@ class PolicyEngine:
 
     # -- internals ---------------------------------------------------------- #
     def _dim_target(self, slot: Timeslot, ts: float) -> TargetState:
+        """Return the dim-warning command: the on-motion look at 30% brightness.
+
+        The floor of 1% keeps the warning visible even for very dim slots.
+        """
         base = self._resolve(slot.on_motion, ts)
         if not base.on:
             return base
@@ -322,6 +343,10 @@ class PolicyEngine:
         return TargetState(on=True, brightness=max(1.0, bri * 0.3), mirek=base.mirek, hex=base.hex)
 
     def _too_bright(self, lux: int | None) -> bool:
+        """Return ``True`` when the lux gate should suppress switching on.
+
+        Unknown lux (no reading yet, or no gate configured) never suppresses.
+        """
         ll = self.policy.light_level
         if ll is None or lux is None:
             return False
@@ -329,10 +354,12 @@ class PolicyEngine:
 
     @staticmethod
     def _expire_override(rt: _AreaRuntime, ts: float) -> None:
+        """Drop an elapsed manual override, returning the area to standby."""
         if rt.phase == Phase.OVERRIDDEN and ts >= rt.override_until_ts:
             rt.phase = Phase.STANDBY
             rt.override_until_ts = 0.0
 
     # -- introspection (for status/dry-run) -------------------------------- #
     def phase_of(self, area: str) -> Phase:
+        """Return ``area``'s current :class:`Phase` (raises ``KeyError`` if unknown)."""
         return self._areas[area].phase

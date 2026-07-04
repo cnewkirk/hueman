@@ -19,6 +19,14 @@ from .sun import SolarCalculator
 
 @dataclass(frozen=True)
 class DriveTo:
+    """Drive the zone to this curve sample over ``transition_ms``.
+
+    Attributes:
+        brightness: Target brightness percentage (0-100), floor/ceiling applied.
+        mirek: Target colour temperature in mirek.
+        transition_ms: Cross-fade duration for the write, in milliseconds.
+    """
+
     brightness: float
     mirek: int
     transition_ms: int
@@ -26,16 +34,25 @@ class DriveTo:
 
 @dataclass(frozen=True)
 class FadeOff:
+    """Fade the zone off over ``transition_ms`` (the hand-off at window close)."""
+
     transition_ms: int
 
 
 @dataclass(frozen=True)
 class Hold:
+    """Do nothing this tick; ``reason`` names the mode holding (for logging)."""
+
     reason: str
 
 
 class CircadianController:
-    """State machine deciding the circadian daemon's per-tick action."""
+    """State machine deciding the circadian daemon's per-tick action.
+
+    Modes: ``DRIVING`` (inside the window, following the curve), ``SUSPENDED``
+    (a manual override was detected; hands off until resumed or the next
+    window open), and ``NIGHT_IDLE`` (outside the window, nothing to do).
+    """
 
     DRIVING = "driving"
     SUSPENDED = "suspended"
@@ -49,6 +66,15 @@ class CircadianController:
         tz_offset_hours: float,
         tz: str | None = None,
     ) -> None:
+        """Bind the daemon spec, curve, solar calculator and timezone.
+
+        Args:
+            spec: Daemon settings (window anchors, transitions, override policy).
+            circadian: Curve parameters used to build the ``CircadianCurve``.
+            solar: Calculator for the site's sun times and elevation.
+            tz_offset_hours: Fixed UTC offset fallback when ``tz`` is unset.
+            tz: Optional IANA timezone name; when set, local time is DST-correct.
+        """
         self._spec = spec
         self._curve = CircadianCurve(circadian)
         self._solar = solar
@@ -59,6 +85,7 @@ class CircadianController:
 
     @property
     def mode(self) -> str:
+        """Return the current daemon mode (``DRIVING``/``SUSPENDED``/``NIGHT_IDLE``)."""
         return self._mode
 
     # -- public accessors (used by the bias subsystem, independent of mode) -- #
@@ -72,20 +99,24 @@ class CircadianController:
 
     # -- time helpers ------------------------------------------------------- #
     def _local_dt(self, now: float) -> _dt.datetime:
+        """Return ``now`` as a local datetime (DST-correct when a tz name is set)."""
         tz = ZoneInfo(self._tz) if self._tz else _dt.timezone(
             _dt.timedelta(hours=self._tz_offset_hours))
         return _dt.datetime.fromtimestamp(now, tz)
 
     def _minute_of_day(self, now: float) -> float:
+        """Return ``now`` as fractional local minutes after midnight."""
         d = self._local_dt(now)
         return d.hour * 60 + d.minute + d.second / 60.0
 
     def _window(self, date: _dt.date) -> tuple[int, int]:
+        """Return ``(start_min, hand_off_min)`` for ``date``, start sun-resolved."""
         sun = self._solar.sun_times(date)
         start = self._spec.start.resolve(sun.sunrise_min, sun.sunset_min)
         return start, self._spec.hand_off_min
 
     def _in_window(self, now: float) -> bool:
+        """Return whether ``now`` falls in ``[start, hand_off)`` for its local date."""
         date = self._local_dt(now).date()
         start, hand_off = self._window(date)
         minute = self._minute_of_day(now)
@@ -93,6 +124,7 @@ class CircadianController:
 
     # -- target ------------------------------------------------------------- #
     def _drive_to(self, now: float) -> DriveTo:
+        """Sample the elevation-driven curve at ``now`` and apply floor/ceiling."""
         date = self._local_dt(now).date()
         elev = self._solar.solar_elevation(date, self._minute_of_day(now))
         noon = self._solar.noon_elevation(date)
@@ -106,14 +138,29 @@ class CircadianController:
 
     # -- events ------------------------------------------------------------- #
     def on_external_change(self, now: float) -> None:
+        """Suspend on a detected manual override.
+
+        A no-op if ``detect_override`` is disabled, so the daemon keeps
+        driving through external writes.
+        """
         if self._spec.detect_override:
             self._mode = self.SUSPENDED
 
     def on_resume(self, now: float) -> None:
+        """Resume driving (operator/API resume), regardless of the current mode."""
         self._mode = self.DRIVING
 
     # -- per-tick decision -------------------------------------------------- #
     def tick(self, now: float) -> DriveTo | FadeOff | Hold:
+        """Advance the state machine one tick and return the action for ``now``.
+
+        ``SUSPENDED`` holds until an explicit resume, except that a window *open*
+        edge with ``daily_safety_resume`` re-arms driving (so an overnight
+        override never silently disables the daemon forever). ``NIGHT_IDLE``
+        flips to ``DRIVING`` when the window is active. While driving, an
+        in-window tick returns the curve sample; the first out-of-window tick
+        returns a single ``FadeOff`` and drops to ``NIGHT_IDLE``.
+        """
         in_window = self._in_window(now)
         window_opened = in_window and not self._was_in_window
         self._was_in_window = in_window

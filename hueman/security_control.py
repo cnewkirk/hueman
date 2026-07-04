@@ -86,6 +86,11 @@ class SecurityController:
     """Decides each security frame: ALERT breathe, then luminance-capped CHAOS."""
 
     def __init__(self, spec: SecuritySpec, *, lights: tuple[str, ...] = (), seed: int = 1) -> None:
+        """Bind the spec; ``lights`` (member unit ids) enables per-light chaos.
+
+        ``seed`` perturbs each unit's hue offset so distinct runs (or tests)
+        get different but deterministic colour sequences.
+        """
         self._spec = spec
         self._lights = tuple(lights)
         self._seed = seed
@@ -95,19 +100,31 @@ class SecurityController:
         )
 
     def phase_at(self, elapsed_ms: float) -> str:
+        """Return ``PHASE_ALERT`` until ``alert_seconds`` elapse, then ``PHASE_CHAOS``."""
         return PHASE_ALERT if elapsed_ms < self._alert_ms else PHASE_CHAOS
 
     def is_expired(self, elapsed_ms: float) -> bool:
+        """Return ``True`` once the show has run for ``max_duration_ms`` or longer."""
         return elapsed_ms >= self._spec.max_duration_ms
 
     def frame_at(self, elapsed_ms: float, frame_index: int) -> SecurityFrame:
+        """Return the frame for this instant, dispatching on the current phase.
+
+        ``elapsed_ms`` selects the phase (wall time since arming); ``frame_index``
+        is the daemon's monotonically increasing frame counter, which drives the
+        chaos rotation and flash-cap quantisation.
+        """
         if self.phase_at(elapsed_ms) == PHASE_ALERT:
             return self._alert_frame(elapsed_ms)
         return self._chaos_frame(elapsed_ms, frame_index)
 
     def _alert_frame(self, elapsed_ms: float) -> SecurityFrame:
-        # Slow cosine breathe between alert_min_brightness and 100 (trough at t=0).
-        # Always whole-group and synchronized: this phase is the legible one.
+        """Return the ALERT frame: a slow synchronized whole-group breathe.
+
+        Cosine wave between ``alert_min_brightness`` and 100 percent (trough at
+        ``t=0``) in the configured alert colour — deliberately legible, unlike
+        the chaos phase.
+        """
         seconds = elapsed_ms / 1000.0
         wave = 0.5 - 0.5 * math.cos(2 * math.pi * self._spec.alert_breathe_hz * seconds)
         lo = self._spec.alert_min_brightness

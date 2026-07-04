@@ -13,6 +13,8 @@ application key passed in the ``hue-application-key`` header.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import urllib3
 import requests
 from requests.adapters import HTTPAdapter
@@ -35,27 +37,47 @@ class _FingerprintAdapter(HTTPAdapter):
     on the long-lived SSE stream that reuses this session.
     """
 
-    def __init__(self, fingerprint: str, **kwargs) -> None:
+    def __init__(self, fingerprint: str, **kwargs: Any) -> None:
+        """Store the expected SHA-256 ``fingerprint`` and initialise the adapter."""
         self._fingerprint = fingerprint
         super().__init__(**kwargs)
 
-    def _pin_kwargs(self, kwargs: dict) -> dict:
+    def _pin_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Inject the fingerprint-pinning TLS options into urllib3 pool kwargs."""
         kwargs["assert_fingerprint"] = self._fingerprint
         kwargs["cert_reqs"] = "CERT_NONE"  # self-signed: no CA chain to check
         kwargs["assert_hostname"] = False  # identity comes from the fingerprint
         return kwargs
 
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+    def init_poolmanager(
+        self, connections: int, maxsize: int, block: bool = False, **pool_kwargs: Any
+    ) -> None:
+        """Create the connection pool with fingerprint pinning enforced."""
         super().init_poolmanager(
             connections, maxsize, block=block, **self._pin_kwargs(pool_kwargs)
         )
 
-    def proxy_manager_for(self, proxy, **proxy_kwargs):
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        """Return a proxy manager that also enforces the pinned fingerprint."""
         return super().proxy_manager_for(proxy, **self._pin_kwargs(proxy_kwargs))
 
 
 class HueClient:
-    def __init__(self, bridge: Bridge, *, timeout: float = 10.0):
+    """Authenticated session against one Hue bridge's CLIP v2 API.
+
+    Owns the ``requests.Session`` (TLS trust configured per the bridge's
+    ``tls`` mode at construction) and exposes the typed-resource CRUD helpers
+    the reconcilers and runtime build on. All errors surface as
+    :class:`~hueman.errors.BridgeError` / :class:`~hueman.errors.AuthError`
+    so callers never handle raw ``requests`` exceptions.
+
+    Args:
+        bridge: Bridge connection settings (host, application key, TLS mode).
+        timeout: Per-request timeout in seconds.
+    """
+
+    def __init__(self, bridge: Bridge, *, timeout: float = 10.0) -> None:
+        """Build the session, configure TLS, and attach the application key."""
         self.bridge = bridge
         self.timeout = timeout
         self._base = f"https://{bridge.host}"
@@ -66,6 +88,7 @@ class HueClient:
 
     # -- TLS ---------------------------------------------------------------- #
     def _configure_tls(self, tls: TlsConfig) -> None:
+        """Apply the configured TLS trust mode (``cacert``/``pin``/``insecure``) to the session."""
         if tls.mode == "cacert":
             self._session.verify = tls.cacert
         elif tls.mode == "pin":
@@ -80,9 +103,35 @@ class HueClient:
 
     # -- low level ---------------------------------------------------------- #
     def _url(self, path: str) -> str:
+        """Return the absolute bridge URL for an API ``path``."""
         return f"{self._base}{path}"
 
-    def _request(self, method: str, path: str, *, json_body=None, need_key: bool = True) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        need_key: bool = True,
+    ) -> dict[str, Any]:
+        """Send one CLIP request and return the parsed JSON envelope.
+
+        Args:
+            method: HTTP verb (``GET``/``POST``/``PUT``/``DELETE``).
+            path: API path starting with ``/`` (appended to the bridge base URL).
+            json_body: JSON body to send, if any.
+            need_key: Require a paired application key before sending (all
+                endpoints except v1 key creation).
+
+        Returns:
+            The decoded response body (the v2 ``{"data": ..., "errors": ...}``
+            envelope).
+
+        Raises:
+            AuthError: If ``need_key`` is set and no application key is configured.
+            BridgeError: On transport failure, non-JSON response, HTTP >= 400,
+                or per-call errors reported in the v2 ``errors`` array.
+        """
         if need_key and not self.bridge.application_key:
             raise AuthError("no application key; run 'hueman auth' to pair with the bridge")
         try:
@@ -94,7 +143,12 @@ class HueClient:
         return self._parse(resp, method, path)
 
     @staticmethod
-    def _parse(resp: requests.Response, method: str, path: str) -> dict:
+    def _parse(resp: requests.Response, method: str, path: str) -> dict[str, Any]:
+        """Decode a CLIP response, surfacing v2 in-body errors as :class:`BridgeError`.
+
+        The v2 API reports per-call problems in an ``errors`` array even on
+        HTTP 200, so that array is checked before the status code.
+        """
         try:
             body = resp.json()
         except ValueError:
@@ -106,11 +160,24 @@ class HueClient:
             raise BridgeError(f"{method} {path}: {msg}")
         if resp.status_code >= 400:
             raise BridgeError(f"{method} {path}: HTTP {resp.status_code}")
-        return body
+        # A successful v2 response is always a JSON object envelope.
+        return cast("dict[str, Any]", body)
 
     # -- key creation (v1 endpoint, still the documented path) -------------- #
-    def create_application_key(self) -> dict:
-        """Press the link button first. Returns ``{username, clientkey}``."""
+    def create_application_key(self) -> dict[str, Any]:
+        """Pair with the bridge and return the new key material.
+
+        Press the bridge link button first; the bridge only honours the
+        request for ~30 seconds afterwards.
+
+        Returns:
+            The v1 ``success`` object, ``{"username": ..., "clientkey": ...}``.
+
+        Raises:
+            AuthError: If the link button was not pressed or the bridge
+                rejected the request.
+            BridgeError: On transport failure or a non-JSON response.
+        """
         try:
             resp = self._session.post(
                 self._url("/api"),
@@ -132,30 +199,50 @@ class HueClient:
         success = entry.get("success", {})
         if "username" not in success:
             raise AuthError(f"unexpected key-creation response: {data!r}")
-        return success
+        return cast("dict[str, Any]", success)
 
     # -- typed resource helpers -------------------------------------------- #
-    def get_resources(self, rtype: str) -> list[dict]:
-        return self._request("GET", f"/clip/v2/resource/{rtype}").get("data", [])
+    def get_resources(self, rtype: str) -> list[dict[str, Any]]:
+        """Return every resource of type ``rtype`` (empty list if none)."""
+        data: list[dict[str, Any]] = self._request(
+            "GET", f"/clip/v2/resource/{rtype}"
+        ).get("data", [])
+        return data
 
-    def get_all_resources(self) -> list[dict]:
+    def get_all_resources(self) -> list[dict[str, Any]]:
         """Return every resource of every type — the authoritative full census.
 
         Use this (not a hand-picked list of types) before concluding a resource
         kind is absent; new/unknown types (e.g. MotionAware) show up here.
         """
-        return self._request("GET", "/clip/v2/resource").get("data", [])
+        data: list[dict[str, Any]] = self._request("GET", "/clip/v2/resource").get("data", [])
+        return data
 
-    def get_resource(self, rtype: str, rid: str) -> dict | None:
-        data = self._request("GET", f"/clip/v2/resource/{rtype}/{rid}").get("data", [])
+    def get_resource(self, rtype: str, rid: str) -> dict[str, Any] | None:
+        """Return the resource ``rid`` of type ``rtype``, or ``None`` if absent."""
+        data: list[dict[str, Any]] = self._request(
+            "GET", f"/clip/v2/resource/{rtype}/{rid}"
+        ).get("data", [])
         return data[0] if data else None
 
-    def create_resource(self, rtype: str, body: dict) -> str:
-        data = self._request("POST", f"/clip/v2/resource/{rtype}", json_body=body).get("data", [])
-        return data[0]["rid"] if data else ""
+    def create_resource(self, rtype: str, body: dict[str, Any]) -> str:
+        """Create a resource of type ``rtype`` and return its new ``rid``.
 
-    def update_resource(self, rtype: str, rid: str, body: dict) -> None:
+        Returns an empty string if the bridge acknowledged the create without
+        echoing the new resource reference.
+        """
+        data: list[dict[str, Any]] = self._request(
+            "POST", f"/clip/v2/resource/{rtype}", json_body=body
+        ).get("data", [])
+        if not data:
+            return ""
+        rid: str = data[0]["rid"]
+        return rid
+
+    def update_resource(self, rtype: str, rid: str, body: dict[str, Any]) -> None:
+        """PUT ``body`` onto the resource ``rid`` of type ``rtype``."""
         self._request("PUT", f"/clip/v2/resource/{rtype}/{rid}", json_body=body)
 
     def delete_resource(self, rtype: str, rid: str) -> None:
+        """Delete the resource ``rid`` of type ``rtype``."""
         self._request("DELETE", f"/clip/v2/resource/{rtype}/{rid}")

@@ -63,7 +63,7 @@ def parse_time_ref(value: Any, *, ctx: str) -> str:
     Returned verbatim; resolution to a concrete minute happens later against
     the day's :class:`~hueman.sun.SunTimes` so the same config works all year.
     """
-    if value in ("sunrise", "sunset"):
+    if isinstance(value, str) and value in ("sunrise", "sunset"):
         return value
     if isinstance(value, str) and _TIME_RE.match(value):
         return value
@@ -115,13 +115,15 @@ def parse_anchor(value: Any, *, ctx: str) -> Anchor:
     )
 
 
-def _require(d: dict, key: str, ctx: str) -> Any:
+def _require(d: dict[str, Any], key: str, ctx: str) -> Any:
+    """Return ``d[key]``, raising :class:`ConfigError` naming ``ctx`` if absent."""
     if key not in d:
         raise ConfigError(f"{ctx}: missing required key '{key}'")
     return d[key]
 
 
-def _as_dict(value: Any, ctx: str) -> dict:
+def _as_dict(value: Any, ctx: str) -> dict[str, Any]:
+    """Coerce a YAML node to a mapping: ``None`` becomes ``{}``, non-dicts raise."""
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -134,13 +136,29 @@ def _as_dict(value: Any, ctx: str) -> dict:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Location:
+    """Where the lights live, for local sunrise/sunset computation.
+
+    Attributes:
+        lat: Latitude in decimal degrees, north positive.
+        lon: Longitude in decimal degrees, east positive.
+        tz_offset_hours: Local UTC offset in hours (fixed, or derived from ``tz``).
+        tz: Optional IANA timezone name; when set, sun math stays DST-correct.
+    """
+
     lat: float
     lon: float
     tz_offset_hours: float
     tz: str | None = None
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "Location":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "Location":
+        """Parse the ``location:`` block.
+
+        Validates lat/lon are numbers in range and that at least one of
+        ``tz`` (a known IANA name) or ``tz_offset_hours`` is given; raises
+        :class:`ConfigError` otherwise. A ``tz`` name wins for DST-correctness,
+        with the offset derived for today as a fallback value.
+        """
         try:
             lat = float(_require(d, "lat", ctx))
             lon = float(_require(d, "lon", ctx))
@@ -183,7 +201,8 @@ class TlsConfig:
     pin_file: str = ".hue-pin.json"
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "TlsConfig":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "TlsConfig":
+        """Parse the ``bridge.tls:`` block; ``mode: cacert`` requires a ``cacert`` path."""
         mode = d.get("mode", "pin")
         if mode not in ("pin", "cacert", "insecure"):
             raise ConfigError(f"{ctx}: tls.mode must be pin|cacert|insecure, got {mode!r}")
@@ -194,12 +213,28 @@ class TlsConfig:
 
 @dataclass(frozen=True)
 class Bridge:
+    """How to reach and authenticate to the Hue bridge.
+
+    Attributes:
+        host: Bridge hostname or IP.
+        application_key: CLIP API key, or ``None`` if not resolvable yet
+            (commands that talk to the bridge fail later with a clear message).
+        tls: How to trust the bridge's self-signed certificate.
+    """
+
     host: str
     application_key: str | None
     tls: TlsConfig
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "Bridge":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "Bridge":
+        """Parse the ``bridge:`` block.
+
+        ``host`` may come from the file or ``$HUE_BRIDGE_HOST`` (one is
+        required). The application key is resolved env-first (the env var named
+        by ``application_key_env``, default ``HUE_APPLICATION_KEY``) so secrets
+        stay out of the file; an inline ``application_key`` is the fallback.
+        """
         host = d.get("host") or os.environ.get("HUE_BRIDGE_HOST")
         if not host:
             raise ConfigError(f"{ctx}: 'host' is required (or set $HUE_BRIDGE_HOST)")
@@ -221,6 +256,13 @@ class Color:
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "Color":
+        """Parse a colour node into a :class:`Color`.
+
+        Accepts the string ``"circadian"``, or a mapping with one of ``mirek``
+        (validated against the Hue range), ``kelvin`` (converted to mirek and
+        clamped), or ``hex`` (6-digit RGB) — checked in that order, first match
+        wins. Raises :class:`ConfigError` for anything else.
+        """
         if value == "circadian":
             return cls(mode="circadian")
         d = _as_dict(value, ctx)
@@ -259,6 +301,12 @@ class LightState:
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "LightState":
+        """Parse a light-state mapping into a :class:`LightState`.
+
+        All of ``on``/``brightness``/``color`` are optional. Validates
+        ``brightness`` is 0-100 when present; ``color`` is delegated to
+        :meth:`Color.parse`.
+        """
         d = _as_dict(value, ctx)
         on = bool(d.get("on", True))
         bri = d.get("brightness")
@@ -279,7 +327,13 @@ class Timeslot:
     standby: LightState | None       # what "off" looks like in this band (None => fully off)
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "Timeslot":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "Timeslot":
+        """Parse one entry of a motion policy's ``timeslots:`` list.
+
+        Requires ``name``, ``start``, ``on_motion`` and ``timeout``. The
+        ``on_motion: circadian`` shorthand expands to an on-state with
+        circadian colour; a missing ``standby`` means "fully off".
+        """
         name = _require(d, "name", ctx)
         ctx = f"{ctx}[{name}]"
         on_motion = (
@@ -299,11 +353,19 @@ class Timeslot:
 
 @dataclass(frozen=True)
 class DimBeforeOff:
+    """Warn before lights-out: dim for ``duration_ms``, restoring on new motion.
+
+    Attributes:
+        duration_ms: How long the dimmed warning phase lasts.
+        recovery: Whether motion during the dim phase restores the on-state.
+    """
+
     duration_ms: int
     recovery: bool = True
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "DimBeforeOff":
+        """Parse a ``dim_before_off:`` mapping; ``duration`` is required."""
         d = _as_dict(value, ctx)
         return cls(
             duration_ms=parse_duration(_require(d, "duration", ctx), ctx=f"{ctx}.duration"),
@@ -321,6 +383,7 @@ class ManualOverride:
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "ManualOverride":
+        """Parse a ``manual_override:`` mapping (all keys optional, ``None`` ok)."""
         d = _as_dict(value, ctx)
         return cls(
             respect=bool(d.get("respect", True)),
@@ -337,6 +400,7 @@ class LightLevel:
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "LightLevel":
+        """Parse a ``light_level:`` mapping; ``threshold_lux`` is required."""
         d = _as_dict(value, ctx)
         return cls(threshold_lux=int(_require(d, "threshold_lux", ctx)))
 
@@ -346,6 +410,20 @@ _SENSITIVITY = {"low": 0, "medium": 1, "high": 2, "max": 3}
 
 @dataclass(frozen=True)
 class MotionPolicy:
+    """One motion-sensor automation: sensor + target areas + per-band behaviour.
+
+    Attributes:
+        name: Policy name (unique across the config).
+        sensor: Device name of the motion sensor.
+        areas: Room/zone names this policy controls.
+        enabled: Whether the automation is active on the bridge.
+        timeslots: Time-of-day bands, each with its own look and timeout.
+        sensitivity: Sensor sensitivity 0-3, or ``None`` to leave it alone.
+        light_level: Optional lux gate (only run when darker than threshold).
+        dim_before_off: Optional dim-warning phase before turning off.
+        manual_override: How the automation yields to manual scene changes.
+    """
+
     name: str
     sensor: str                      # device name of the motion sensor
     areas: tuple[str, ...]           # room/zone names this policy controls
@@ -357,7 +435,14 @@ class MotionPolicy:
     manual_override: ManualOverride
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "MotionPolicy":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "MotionPolicy":
+        """Parse one entry of the ``motion_policies:`` list.
+
+        Requires ``name``, ``sensor``, at least one of ``rooms``/``zones``/
+        ``areas`` (a bare string is accepted as a one-element list), and a
+        non-empty ``timeslots`` list. ``sensitivity`` accepts the named levels
+        ``low``/``medium``/``high``/``max`` or a raw integer.
+        """
         name = _require(d, "name", ctx)
         ctx = f"{ctx}[{name}]"
         areas = d.get("rooms") or d.get("areas") or d.get("zones")
@@ -405,7 +490,7 @@ class Area:
     archetype: str | None = None
 
     @classmethod
-    def parse(cls, d: dict, kind: str, ctx: str) -> "Area":
+    def parse(cls, d: dict[str, Any], kind: str, ctx: str) -> "Area":
         """Parse one area entry of the given ``kind``."""
         name = _require(d, "name", ctx)
         ctx = f"{ctx}[{name}]"
@@ -435,7 +520,12 @@ class SmartSceneSpec:
     schedule: tuple[tuple[str, Anchor], ...]
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "SmartSceneSpec":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "SmartSceneSpec":
+        """Parse one entry of the ``smart_scenes:`` list.
+
+        Requires ``name`` and a non-empty ``schedule`` mapping of scene name to
+        anchor expression (``sunrise``/``sunset±offset`` or ``HH:MM``).
+        """
         name = _require(d, "name", ctx)
         ctx = f"{ctx}[{name}]"
         raw = _as_dict(_require(d, "schedule", ctx), f"{ctx}.schedule")
@@ -458,6 +548,12 @@ class SceneLook:
 
     @classmethod
     def parse(cls, value: Any, ctx: str) -> "SceneLook":
+        """Parse a scene-look mapping into a :class:`SceneLook`.
+
+        Requires ``brightness`` (0-100) plus a colour as ``hex`` or
+        ``mirek``/``kelvin`` (kelvin is converted to mirek and clamped to the
+        Hue range).
+        """
         d = _as_dict(value, ctx)
         try:
             bri = float(_require(d, "brightness", ctx))
@@ -504,6 +600,14 @@ class NightMotionSpec:
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "night_motion") -> "NightMotionSpec":
+        """Parse the ``night_motion:`` block.
+
+        Requires ``automation``, ``zone``, ``start``, ``timeout`` and the three
+        ``day``/``evening``/``night`` looks. ``start`` and ``day_start`` must be
+        clock times (not sun anchors), ``timeout`` at least one minute, ``mode``
+        one of ``full``/``night_only``, and ``day_start`` strictly between
+        00:00 and ``start`` (it delimits the actionless daytime slot).
+        """
         d = _as_dict(value, ctx)
         start = parse_time_ref(_require(d, "start", ctx), ctx=f"{ctx}.start")
         if start in ("sunrise", "sunset"):
@@ -562,6 +666,12 @@ class CircadianSceneSpec:
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_scene") -> "CircadianSceneSpec":
+        """Parse the ``circadian_scene:`` block.
+
+        Requires ``smart_scene`` and ``zone``. ``transition`` defaults to
+        ``"ramp"`` (mapped to ``transition_ms=None``); ``hand_off`` defaults to
+        22:34 and must be a clock time, not a sun anchor.
+        """
         d = _as_dict(value, ctx)
         transition = d.get("transition", "ramp")
         transition_ms = None if transition == "ramp" else parse_duration(
@@ -601,6 +711,13 @@ class BiasLight:
 
     @classmethod
     def parse(cls, name: str, value: Any, ctx: str) -> "BiasLight":
+        """Parse one entry of the ``bias.lights:`` mapping (keyed by light name).
+
+        The ``look`` must carry an explicit ``brightness`` (0-100) and a static
+        colour — ``circadian`` is rejected because a hold has to be a fixed
+        target. ``idle`` must be ``circadian`` or ``off``; a YAML-1.1 bare
+        ``off`` (parsed as ``False``) is accepted as the string ``"off"``.
+        """
         d = _as_dict(value, ctx)
         look_d = _as_dict(_require(d, "look", ctx), f"{ctx}.look")
         if "brightness" not in look_d:
@@ -654,6 +771,12 @@ class BiasSpec:
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_daemon.bias") -> "BiasSpec":
+        """Parse the ``circadian_daemon.bias:`` block.
+
+        Requires a non-empty ``lights`` mapping; the ``triggers`` sub-blocks
+        (``sse``, ``control_file``, ``probe``) are all optional. Validates
+        ``probe.mode`` is ``tcp`` or ``icmp`` and parses the various durations.
+        """
         d = _as_dict(value, ctx)
         raw_lights = _as_dict(_require(d, "lights", ctx), f"{ctx}.lights")
         if not raw_lights:
@@ -721,6 +844,13 @@ class CircadianDaemonSpec:
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_daemon") -> "CircadianDaemonSpec":
+        """Parse the ``circadian_daemon:`` block.
+
+        Only ``zone`` is required; everything else has a live-tested default.
+        ``hand_off`` must be a clock time (not a sun anchor). Durations under
+        ``manual_override``/``retry`` and the top level are parsed to ms, and
+        an optional ``bias`` block is delegated to :meth:`BiasSpec.parse`.
+        """
         d = _as_dict(value, ctx)
         mo = _as_dict(d.get("manual_override"), f"{ctx}.manual_override")
         retry = _as_dict(d.get("retry"), f"{ctx}.retry")
@@ -771,7 +901,13 @@ class SceneSpec:
     lights: tuple[tuple[str, LightState], ...]
 
     @classmethod
-    def parse(cls, d: dict, ctx: str) -> "SceneSpec":
+    def parse(cls, d: dict[str, Any], ctx: str) -> "SceneSpec":
+        """Parse one entry of the ``scenes:`` list.
+
+        Requires ``name``, ``zone`` and a non-empty ``lights`` mapping of light
+        name to state. Rejects ``circadian`` colours — a bridge scene is a
+        static look and cannot track the curve.
+        """
         name = _require(d, "name", ctx)
         ctx = f"{ctx}[{name}]"
         zone = str(_require(d, "zone", ctx))
@@ -820,6 +956,14 @@ class SecuritySpec:
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "security") -> "SecuritySpec":
+        """Parse the ``security:`` block.
+
+        Requires at least one entry in ``groups`` (a bare string is accepted).
+        Validates the alert look (colour hex, brightness 0-100, ``breathe_hz``
+        in (0, 2]) and the chaos safety caps: ``frame_interval`` >= 50 ms,
+        ``min_flash_interval`` >= 334 ms (the photosensitive-seizure floor),
+        and ``max_duration`` longer than the alert phase.
+        """
         d = _as_dict(value, ctx)
         raw_groups = d.get("groups") or []
         if isinstance(raw_groups, str):
@@ -886,6 +1030,18 @@ class SecuritySpec:
 
 @dataclass(frozen=True)
 class Config:
+    """The fully validated desired state — the root of the config tree.
+
+    One instance corresponds to one YAML document; every feature block is
+    already validated, so downstream code (plan/apply/daemon) never re-checks
+    shapes. Optional blocks are ``None``/empty when absent from the file.
+
+    Attributes:
+        require_all_lights_assigned: When true, ``plan`` emits a blocked change
+            for every bridge light not assigned to any declared room.
+        marker: Metadata tag identifying managed resources (see ``DEFAULT_MARKER``).
+    """
+
     bridge: Bridge
     location: Location
     circadian: CircadianParams
@@ -901,7 +1057,15 @@ class Config:
     marker: str = DEFAULT_MARKER
 
     @classmethod
-    def parse(cls, doc: dict) -> "Config":
+    def parse(cls, doc: dict[str, Any]) -> "Config":
+        """Parse a whole YAML document into a :class:`Config`.
+
+        Requires the ``bridge`` and ``location`` blocks; everything else is
+        optional. Beyond delegating each block to its own parser, this enforces
+        the cross-cutting invariants: unique names within ``motion_policies``/
+        ``areas``/``smart_scenes``/``scenes`` and single-room membership per
+        light. Raises :class:`ConfigError` on the first violation.
+        """
         if not isinstance(doc, dict):
             raise ConfigError("top-level config must be a mapping")
         bridge = Bridge.parse(_as_dict(_require(doc, "bridge", "config"), "bridge"), "bridge")
@@ -954,7 +1118,13 @@ class Config:
         )
 
 
-def _parse_circadian(d: dict) -> CircadianParams:
+def _parse_circadian(d: dict[str, Any]) -> CircadianParams:
+    """Parse the ``circadian:`` block as overrides on the default curve params.
+
+    Unknown keys are ignored except ``night_start``, which is rejected loudly
+    (it used to parse but do nothing). Range violations surface as
+    :class:`ConfigError` via ``CircadianParams``' own ``__post_init__`` checks.
+    """
     base = CircadianParams()
     kw: dict[str, Any] = {}
     for f in (
@@ -976,7 +1146,7 @@ def _parse_circadian(d: dict) -> CircadianParams:
         raise ConfigError(f"circadian: {e}")
 
 
-def _parse_areas(d: dict) -> tuple[Area, ...]:
+def _parse_areas(d: dict[str, Any]) -> tuple[Area, ...]:
     """Parse the ``areas`` section into room and zone entries."""
     areas: list[Area] = []
     for entry in d.get("rooms") or []:
@@ -1005,7 +1175,8 @@ def _check_single_room_membership(areas: tuple[Area, ...]) -> None:
 
 
 def _check_unique(names: list[str], ctx: str, field_name: str) -> None:
-    seen = set()
+    """Raise :class:`ConfigError` if any name repeats within its section."""
+    seen: set[str] = set()
     for n in names:
         if n in seen:
             raise ConfigError(f"{ctx}: duplicate {field_name} {n!r}")

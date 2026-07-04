@@ -43,8 +43,8 @@ def fetch_fingerprint(host: str, port: int = 443, timeout: float = 5.0) -> str:
     return hashlib.sha256(der).hexdigest()
 
 
-def _load_store(pin_file: Path) -> dict:
-    """Return the parsed pin store.
+def _load_store(pin_file: Path) -> dict[str, str]:
+    """Return the parsed pin store, a ``host -> fingerprint`` mapping.
 
     Distinguishes "file absent" (legitimate first run -> ``{}``) from "file
     present but unreadable/corrupt" (fail closed with :class:`PinError`) so a

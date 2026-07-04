@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "mypy>=1.11",
+    "types-requests",
+    "types-PyYAML",
 ]
 
 [project.scripts]
@@ -30,3 +33,7 @@ include = ["hueman*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.mypy]
+files = ["hueman"]
+strict = true

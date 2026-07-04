@@ -22,15 +22,16 @@ import json
 import os
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
-from .circadian_scene import circadian_timeslots
+from .circadian_scene import CircadianStep, circadian_timeslots
 from .client import HueClient
-from .config import Area, Config, LightState, MotionPolicy, SceneSpec, SmartSceneSpec
+from .config import Area, Config, LightState, MotionPolicy, SceneLook, SceneSpec, SmartSceneSpec
 from .errors import HueIacError
 from .nightmotion import scene_actions_match, scene_body, transform_automation
 from .payload import ColorConverter
 from .state import BridgeState, Group
-from .sun import SolarCalculator
+from .sun import SolarCalculator, SunTimes
 
 #: A smart_scene recurs every day of the week.
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -91,6 +92,7 @@ class Reconciler(abc.ABC):
     """
 
     def __init__(self, client: HueClient, state: BridgeState, config: Config) -> None:
+        """Store the client, live state, and config shared by plan/apply."""
         self._client = client
         self._state = state
         self._config = config
@@ -308,7 +310,7 @@ class AreaReconciler(Reconciler):
             rids.append(light.device_rid if area.kind == "room" else light.light_rid)
         return rids
 
-    def _desired_children(self, area: Area, preserve_from: Group | None = None) -> list[dict]:
+    def _desired_children(self, area: Area, preserve_from: Group | None = None) -> list[dict[str, str]]:
         """Build the CLIP ``children`` list for the area.
 
         For a room update, ``preserve_from`` carries the live group so any
@@ -316,7 +318,7 @@ class AreaReconciler(Reconciler):
         are retained alongside the declared lights rather than rewritten away.
         """
         rtype = "device" if area.kind == "room" else "light"
-        children: list[dict] = [
+        children: list[dict[str, str]] = [
             {"rid": rid, "rtype": rtype} for rid in self._desired_member_rids(area)
         ]
         if preserve_from is not None and area.kind == "room":
@@ -326,9 +328,9 @@ class AreaReconciler(Reconciler):
                     children.append({"rid": rid, "rtype": "device"})
         return children
 
-    def _metadata(self, area: Area) -> dict:
+    def _metadata(self, area: Area) -> dict[str, str]:
         """Build the metadata block for creating an area."""
-        metadata: dict = {"name": area.name}
+        metadata: dict[str, str] = {"name": area.name}
         if area.archetype is not None:
             metadata["archetype"] = area.archetype
         return metadata
@@ -370,16 +372,17 @@ class AreaReconciler(Reconciler):
 
 
 def _hhmm(minute_of_day: int) -> str:
+    """Format a minute-of-day as a zero-padded ``HH:MM`` string."""
     return f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
 
 
-def _slot_minute(tslot: dict) -> int:
+def _slot_minute(tslot: dict[str, Any]) -> int:
     """Return a timeslot's start time as minute-of-day (0 if unset)."""
     time = tslot.get("start_time", {}).get("time", {})
     return int(time.get("hour", 0)) * 60 + int(time.get("minute", 0))
 
 
-def _write_backup(backup_dir: str, resource: dict) -> None:
+def _write_backup(backup_dir: str, resource: dict[str, Any]) -> None:
     """Persist ``resource`` to ``{backup_dir}/{id}-preapply.json`` before a destructive write.
 
     Write-once: an existing backup is never overwritten, so repeated applies (a
@@ -410,11 +413,19 @@ class SmartSceneReconciler(Reconciler):
         self, client: HueClient, state: BridgeState, config: Config,
         for_date: _dt.date | None = None, backup_dir: str = ".hue-backup",
     ) -> None:
+        """Initialize with an optional fixed plan date and backup directory.
+
+        Args:
+            for_date: Compute sun times for this date instead of today
+                (deterministic plans in tests).
+            backup_dir: Directory for pre-apply backups; falsy disables them.
+        """
         super().__init__(client, state, config)
         self._for_date = for_date
         self._backup_dir = backup_dir
 
-    def _sun_times(self):
+    def _sun_times(self) -> SunTimes:
+        """Return sunrise/sunset for the plan date at the configured location."""
         loc = self._config.location
         day = self._for_date or _dt.date.today()
         return SolarCalculator(loc.lat, loc.lon, loc.tz_offset_hours, tz=loc.tz).sun_times(day)
@@ -426,7 +437,14 @@ class SmartSceneReconciler(Reconciler):
         sun = self._sun_times()
         return [self._plan_spec(spec, sun) for spec in self._config.smart_scenes]
 
-    def _plan_spec(self, spec: SmartSceneSpec, sun) -> Change:
+    def _plan_spec(self, spec: SmartSceneSpec, sun: SunTimes) -> Change:
+        """Return the re-timing change (or no-op/blocked) for one smart scene.
+
+        Timeslots whose scene is in the schedule are diffed against the
+        sun-anchored time; scenes missing from the schedule are pruned;
+        timeslots whose target scene cannot be resolved are preserved untouched.
+        A plan that would prune every timeslot is BLOCKED, never applied.
+        """
         smart_scene = self._state.smart_scene(spec.name)
         if smart_scene is None:
             return Change(
@@ -479,9 +497,16 @@ class SmartSceneReconciler(Reconciler):
         return Change("smart_scene", spec.name, ChangeType.UPDATE, summary)
 
     def owns(self, change: Change) -> bool:
+        """Return ``True`` for smart-scene re-timing changes."""
         return change.resource == "smart_scene"
 
     def apply(self, change: Change) -> None:
+        """Rewrite the smart scene's timeslots to the sun-anchored schedule.
+
+        Backs up the live resource first (write-once); prunes unscheduled
+        scenes, preserves unresolvable timeslots, and keeps each week's slots
+        in the chronological order the bridge requires.
+        """
         if not change.is_actionable:
             return
         spec = next((s for s in self._config.smart_scenes if s.name == change.name), None)
@@ -493,7 +518,7 @@ class SmartSceneReconciler(Reconciler):
         weeks = copy.deepcopy(smart_scene.get("week_timeslots", []))
         for week in weeks:
             slots = week.get("timeslots", [])
-            kept: list[dict] = []
+            kept: list[dict[str, Any]] = []
             for tslot in slots:
                 scene_name = self._state.scene_name_for(tslot.get("target", {}).get("rid"))
                 if scene_name is None:
@@ -532,18 +557,30 @@ class NightMotionReconciler(Reconciler):
         self, client: HueClient, state: BridgeState, config: Config,
         backup_dir: str = ".hue-backup",
     ) -> None:
+        """Initialize with the directory where pre-apply backups are written."""
         super().__init__(client, state, config)
         self._backup_dir = backup_dir
 
-    def _roles(self):
+    def _roles(self) -> tuple[tuple[str, SceneLook], ...]:
+        """Return the ``(role, look)`` pairs for the Day/Evening/Night zone scenes."""
         nm = self._config.night_motion
+        assert nm is not None  # helpers only run when night_motion is configured
         return (("Day", nm.day), ("Evening", nm.evening), ("Night", nm.night))
 
     def _scene_name(self, role: str) -> str:
-        return f"{self._config.night_motion.zone} — {role}"
-
-    def _transform(self, inst: dict, zone_rid: str, rids: dict[str, str]) -> dict:
+        """Return the bridge name of the zone scene backing ``role``."""
         nm = self._config.night_motion
+        assert nm is not None  # helpers only run when night_motion is configured
+        return f"{nm.zone} — {role}"
+
+    def _transform(self, inst: dict[str, Any], zone_rid: str, rids: dict[str, str]) -> dict[str, Any]:
+        """Return the automation's configuration retargeted at the zone scenes.
+
+        Pure rewrite of ``inst["configuration"]`` (the input is not mutated);
+        raises ``ValueError`` when the automation cannot be transformed.
+        """
+        nm = self._config.night_motion
+        assert nm is not None  # helpers only run when night_motion is configured
         return transform_automation(
             inst["configuration"], zone_rid=zone_rid,
             day_scene=rids["Day"], evening_scene=rids["Evening"], night_scene=rids["Night"],
@@ -553,6 +590,13 @@ class NightMotionReconciler(Reconciler):
         )
 
     def plan(self) -> list[Change]:
+        """Diff the zone scenes and the automation wiring against the config.
+
+        Emits at most one change: BLOCKED when the automation or zone is
+        missing (or the automation cannot be transformed), an UPDATE describing
+        the scene creations/look updates/retargeting needed, or a NOOP once
+        everything is converged.
+        """
         nm = self._config.night_motion
         if nm is None:
             return []
@@ -564,7 +608,7 @@ class NightMotionReconciler(Reconciler):
         if zone is None:
             return [Change("night_motion", nm.zone, ChangeType.BLOCKED,
                            f"zone '{nm.zone}' not found — apply its areas.zones entry first")]
-        scenes: dict[str, dict] = {}
+        scenes: dict[str, dict[str, Any]] = {}
         for role, _ in self._roles():
             sc = self._state.scene(self._scene_name(role))
             if sc and sc.get("group", {}).get("rid") == zone.rid:
@@ -600,7 +644,7 @@ class NightMotionReconciler(Reconciler):
             f" — night {night} red @ {nm.night.brightness}%, off {nm.timeout_min}m")
         return [Change("night_motion", nm.automation, ChangeType.UPDATE, summary)]
 
-    def _scene_matches(self, scene: dict, zone: Group, look) -> bool:
+    def _scene_matches(self, scene: dict[str, Any], zone: Group, look: SceneLook) -> bool:
         """Return ``True`` if a live zone scene's actions match the desired look."""
         desired = scene_body(
             scene.get("metadata", {}).get("name", ""), zone.rid, list(zone.light_rids),
@@ -609,12 +653,19 @@ class NightMotionReconciler(Reconciler):
         return scene_actions_match(scene.get("actions", []), desired["actions"])
 
     def owns(self, change: Change) -> bool:
+        """Return ``True`` for night-motion changes."""
         return change.resource == "night_motion"
 
     def apply(self, change: Change) -> None:
+        """Ensure the three zone scenes exist, then rewire the automation.
+
+        The behavior_instance is backed up and re-PUT only when its wiring
+        actually changes; a scene-look-only drift skips the automation write.
+        """
         if not change.is_actionable:
             return
         nm = self._config.night_motion
+        assert nm is not None  # plan() only emits night_motion changes when configured
         inst = self._state.behavior_instance(nm.automation)
         zone = self._state.group_optional(nm.zone)
         if inst is None or zone is None:
@@ -627,7 +678,8 @@ class NightMotionReconciler(Reconciler):
         self._backup(inst)
         self._client.update_resource("behavior_instance", inst["id"], {"configuration": new_cfg})
 
-    def _ensure_scene(self, name: str, zone: Group, look) -> str:
+    def _ensure_scene(self, name: str, zone: Group, look: SceneLook) -> str:
+        """Create or refresh the zone scene for ``look`` and return its rid."""
         body = scene_body(
             name, zone.rid, list(zone.light_rids),
             mirek=look.mirek, hex=look.hex, brightness=look.brightness,
@@ -637,10 +689,12 @@ class NightMotionReconciler(Reconciler):
             self._client.update_resource(
                 "scene", existing["id"], {"metadata": body["metadata"], "actions": body["actions"]}
             )
-            return existing["id"]
+            existing_id: str = existing["id"]
+            return existing_id
         return self._client.create_resource("scene", body)
 
-    def _backup(self, inst: dict) -> None:
+    def _backup(self, inst: dict[str, Any]) -> None:
+        """Write the automation's pre-apply backup (write-once)."""
         _write_backup(self._backup_dir, inst)
 
 
@@ -659,50 +713,71 @@ class CircadianSceneReconciler(Reconciler):
         self, client: HueClient, state: BridgeState, config: Config,
         for_date: _dt.date | None = None, backup_dir: str = ".hue-backup",
     ) -> None:
+        """Initialize with an optional fixed plan date and backup directory.
+
+        Args:
+            for_date: Sample the curve for this date instead of today
+                (deterministic plans in tests).
+            backup_dir: Directory for pre-apply backups; falsy disables them.
+        """
         super().__init__(client, state, config)
         self._for_date = for_date
         self._backup_dir = backup_dir
 
     # -- helpers ------------------------------------------------------------ #
     def _solar(self) -> SolarCalculator:
+        """Return a solar calculator for the configured location."""
         loc = self._config.location
         return SolarCalculator(loc.lat, loc.lon, loc.tz_offset_hours, tz=loc.tz)
 
     def _day(self) -> _dt.date:
+        """Return the date the plan targets (``for_date`` or today)."""
         return self._for_date or _dt.date.today()
 
-    def _sun_times(self):
+    def _sun_times(self) -> SunTimes:
+        """Return sunrise/sunset for the plan date."""
         return self._solar().sun_times(self._day())
 
-    def _steps(self):
+    def _steps(self) -> list[CircadianStep]:
+        """Sample the circadian curve into the day's timeslot steps."""
         cs = self._config.circadian_scene
+        assert cs is not None  # helpers only run when circadian_scene is configured
         return circadian_timeslots(
             self._config.circadian, self._solar(), self._day(), hand_off_min=cs.hand_off_min
         )
 
     def _transition_ms(self) -> int:
+        """Return the cross-fade length in ms (configured, or the ramp width)."""
         cs = self._config.circadian_scene
+        assert cs is not None  # helpers only run when circadian_scene is configured
         if cs.transition_ms is not None:
             return cs.transition_ms
         return int(self._config.circadian.ramp_minutes * 60_000)  # "ramp" -> the ramp width
 
     def _scene_name(self, index: int) -> str:
-        return f"{self._config.circadian_scene.smart_scene} — {index + 1}"
+        """Return the generated scene's bridge name for step ``index``."""
+        cs = self._config.circadian_scene
+        assert cs is not None  # helpers only run when circadian_scene is configured
+        return f"{cs.smart_scene} — {index + 1}"
 
-    def _smart_scene_body(self, zone: Group, steps, rids: list[str]) -> dict:
+    def _smart_scene_body(self, zone: Group, steps: list[CircadianStep], rids: list[str]) -> dict[str, Any]:
+        """Build the full ``smart_scene`` body wiring each step to its scene."""
+        cs = self._config.circadian_scene
+        assert cs is not None  # helpers only run when circadian_scene is configured
         slots = [{
             "start_time": {"kind": "time",
                            "time": {"hour": s.minute // 60, "minute": s.minute % 60, "second": 0}},
             "target": {"rid": rid, "rtype": "scene"},
         } for s, rid in zip(steps, rids)]
         return {
-            "metadata": {"name": self._config.circadian_scene.smart_scene},
+            "metadata": {"name": cs.smart_scene},
             "group": {"rid": zone.rid, "rtype": "zone"},
             "week_timeslots": [{"timeslots": slots, "recurrence": list(_WEEKDAYS)}],
             "transition_duration": self._transition_ms(),
         }
 
-    def _scenes_converged(self, zone: Group, steps) -> bool:
+    def _scenes_converged(self, zone: Group, steps: list[CircadianStep]) -> bool:
+        """Return ``True`` when every step's zone scene exists with the right look."""
         for i, step in enumerate(steps):
             sc = self._state.scene(self._scene_name(i))
             if sc is None or sc.get("group", {}).get("rid") != zone.rid:
@@ -713,8 +788,11 @@ class CircadianSceneReconciler(Reconciler):
                 return False
         return True
 
-    def _smart_scene_converged(self, zone: Group, steps) -> bool:
-        ss = self._state.smart_scene(self._config.circadian_scene.smart_scene)
+    def _smart_scene_converged(self, zone: Group, steps: list[CircadianStep]) -> bool:
+        """Return ``True`` when the smart scene's slots and fade match the steps."""
+        cs = self._config.circadian_scene
+        assert cs is not None  # helpers only run when circadian_scene is configured
+        ss = self._state.smart_scene(cs.smart_scene)
         if ss is None or ss.get("group", {}).get("rid") != zone.rid:
             return False
         if ss.get("transition_duration") != self._transition_ms():
@@ -730,6 +808,12 @@ class CircadianSceneReconciler(Reconciler):
 
     # -- plan / apply ------------------------------------------------------- #
     def plan(self) -> list[Change]:
+        """Diff the generated scenes and smart scene against today's curve.
+
+        Emits at most one change: BLOCKED when the zone is missing or the curve
+        produced no steps, an UPDATE when the cycle needs (re)generation, or a
+        NOOP once every scene and the smart scene are sun-anchored.
+        """
         cs = self._config.circadian_scene
         if cs is None:
             return []
@@ -749,12 +833,20 @@ class CircadianSceneReconciler(Reconciler):
                        f"generate {len(steps)}-step circadian cycle on '{cs.zone}' ({mins}m fades)")]
 
     def owns(self, change: Change) -> bool:
+        """Return ``True`` for circadian-cycle changes."""
         return change.resource == "circadian_scene"
 
     def apply(self, change: Change) -> None:
+        """Ensure every step's scene, then create or re-time the smart scene.
+
+        The live smart scene is backed up first; because a smart scene's group
+        is immutable on the bridge, a group mismatch is resolved by delete +
+        recreate rather than an update.
+        """
         if not change.is_actionable:
             return
         cs = self._config.circadian_scene
+        assert cs is not None  # plan() only emits circadian_scene changes when configured
         zone = self._state.group_optional(cs.zone)
         if zone is None:
             return
@@ -778,15 +870,22 @@ class CircadianSceneReconciler(Reconciler):
                 "week_timeslots": body["week_timeslots"],
                 "transition_duration": body["transition_duration"]})
 
-    def _ensure_scene(self, name: str, zone: Group, step) -> str:
+    def _ensure_scene(self, name: str, zone: Group, step: CircadianStep) -> str:
+        """Create or refresh the zone scene for ``step`` and return its rid."""
         body = scene_body(name, zone.rid, list(zone.light_rids),
                           mirek=step.mirek, brightness=step.brightness, on=step.on)
         existing = self._state.scene(name)
         if existing and existing.get("group", {}).get("rid") == zone.rid:
             self._client.update_resource(
                 "scene", existing["id"], {"metadata": body["metadata"], "actions": body["actions"]})
-            return existing["id"]
+            existing_id: str = existing["id"]
+            return existing_id
         return self._client.create_resource("scene", body)
+
+
+#: Normalized scene-action fingerprint: ``(on, brightness, color)`` where color
+#: is ``("xy", x, y)``, ``("ct", mirek)``, or ``None``.
+_NormalizedAction = tuple[bool, float | None, "tuple[str, float, float] | tuple[str, int] | None"]
 
 
 class SceneReconciler(Reconciler):
@@ -801,9 +900,15 @@ class SceneReconciler(Reconciler):
     """
 
     def plan(self) -> list[Change]:
+        """Diff every declared scene against the bridge."""
         return [self._plan_spec(spec) for spec in self._config.scenes]
 
     def _plan_spec(self, spec: SceneSpec) -> Change:
+        """Return the change (or no-op/blocked) for one declared scene.
+
+        BLOCKED when the target zone does not exist yet or a declared light is
+        not a member of it — both need the zone converged first, not a write.
+        """
         group = self._state.group_optional(spec.zone)
         if group is None:
             return Change(
@@ -829,9 +934,11 @@ class SceneReconciler(Reconciler):
                       f"update {len(desired)} light action(s)")
 
     def owns(self, change: Change) -> bool:
+        """Return ``True`` for declared-scene changes."""
         return change.resource == "scene"
 
     def apply(self, change: Change) -> None:
+        """Create the scene, or rewrite its actions when it already exists."""
         if not change.is_actionable:
             return
         spec = next((s for s in self._config.scenes if s.name == change.name), None)
@@ -852,9 +959,9 @@ class SceneReconciler(Reconciler):
             self._client.update_resource("scene", existing["id"], {"actions": actions})
 
     # -- helpers ------------------------------------------------------------ #
-    def _desired_actions(self, spec: SceneSpec) -> list[dict]:
+    def _desired_actions(self, spec: SceneSpec) -> list[dict[str, Any]]:
         """Resolve each light name to a CLIP scene action (target + action body)."""
-        actions: list[dict] = []
+        actions: list[dict[str, Any]] = []
         for light_name, state in spec.lights:
             light = self._state.light(light_name)  # raises ConfigError if unknown
             actions.append({
@@ -864,11 +971,11 @@ class SceneReconciler(Reconciler):
         return actions
 
     @staticmethod
-    def _action_body(state: LightState) -> dict:
+    def _action_body(state: LightState) -> dict[str, Any]:
         """Build a scene ``action`` body from a :class:`LightState`."""
         if not state.on:
             return {"on": {"on": False}}
-        body: dict = {"on": {"on": True}}
+        body: dict[str, Any] = {"on": {"on": True}}
         if state.brightness is not None:
             body["dimming"] = {"brightness": round(state.brightness, 1)}
         if state.color is not None:
@@ -880,13 +987,14 @@ class SceneReconciler(Reconciler):
         return body
 
     @classmethod
-    def _actions_match(cls, existing: list[dict], desired: list[dict]) -> bool:
+    def _actions_match(cls, existing: list[dict[str, Any]], desired: list[dict[str, Any]]) -> bool:
+        """Return ``True`` when two action lists describe the same looks."""
         return cls._normalize(existing) == cls._normalize(desired)
 
     @staticmethod
-    def _normalize(actions: list[dict]) -> dict:
+    def _normalize(actions: list[dict[str, Any]]) -> dict[str, _NormalizedAction]:
         """Reduce a scene's actions to a comparable {rid: (on, bri, color)} map."""
-        out: dict = {}
+        out: dict[str, _NormalizedAction] = {}
         for a in actions:
             rid = a.get("target", {}).get("rid")
             if rid is None:
@@ -895,6 +1003,7 @@ class SceneReconciler(Reconciler):
             on = bool(act.get("on", {}).get("on", True))
             bri = act.get("dimming", {}).get("brightness")
             bri = None if bri is None else round(float(bri), 1)
+            color: tuple[str, float, float] | tuple[str, int] | None
             if "color" in act:
                 xy = act["color"].get("xy", {})
                 color = ("xy", round(float(xy.get("x", 0)), 4), round(float(xy.get("y", 0)), 4))
@@ -917,6 +1026,7 @@ class Planner:
     """
 
     def __init__(self, client: HueClient, state: BridgeState, config: Config) -> None:
+        """Instantiate every reconciler, in apply order."""
         # Order matters: areas are reconciled before sensitivity so lights have
         # a home before anything else references them.
         self._reconcilers: list[Reconciler] = [

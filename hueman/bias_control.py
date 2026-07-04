@@ -100,6 +100,7 @@ class TriggerAggregator:
     """
 
     def __init__(self, debounce_ms: int = 0) -> None:
+        """Start with no active sources; edges must hold ``debounce_ms`` to commit."""
         self._debounce_s = debounce_ms / 1000.0
         self._active: set[str] = set()   # sources currently reporting on
         self._committed = False
@@ -108,10 +109,12 @@ class TriggerAggregator:
         self.last_source: str | None = None   # source that caused the last raw flip
 
     def on(self, now: float, source: str = "default") -> None:
+        """Record an on-edge from ``source`` at ``now`` (idempotent per source)."""
         self._active.add(source)
         self._recompute(now, source)
 
     def off(self, now: float, source: str = "default") -> None:
+        """Record an off-edge from ``source`` at ``now`` (idempotent per source)."""
         self._active.discard(source)
         self._recompute(now, source)
 
@@ -124,6 +127,11 @@ class TriggerAggregator:
         self._recompute(now, "reset")
 
     def _recompute(self, now: float, source: str) -> None:
+        """Refresh the raw OR-signal after an edge from ``source``.
+
+        On a flip, restart the debounce clock and credit ``source`` as the
+        cause; edges that don't flip the signal leave both alone.
+        """
         raw = bool(self._active)
         if raw != self._raw:
             self._raw = raw
@@ -131,6 +139,11 @@ class TriggerAggregator:
             self.last_source = source
 
     def tv_on(self, now: float) -> bool:
+        """Return the committed TV-on signal as of ``now``.
+
+        Commits a pending raw flip once it has held for the debounce window;
+        with ``debounce_ms == 0`` this is the raw signal itself.
+        """
         if (
             self._raw != self._committed
             and self._raw_since is not None
