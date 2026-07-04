@@ -22,12 +22,12 @@ daemon.** The cron job is retired once this container is confirmed running.
 > **`hue.yaml` MUST contain a `circadian_daemon:` block.** `hue-iac circadian run`
 > raises `HueIacError("no 'circadian_daemon' block in config")` and the container exits
 > immediately (crash-loops under `--restart always`) if it is missing. At minimum the
-> block needs `zone:` (the apartment zone the daemon drives). The daemon tunables also
+> block needs `zone:` (the zone the daemon drives). The daemon tunables also
 > live here — notably `manual_override.control_file` (the resume-signal file, default
 > `.hue-circadian-resume`) and `log.path` (default `logs/circadian.log`, which lands
 > under the mounted `/data/logs`). See `hue_iac/config.py` (`CircadianDaemonSpec`) for the
-> full set of keys and their defaults. The live `hue.yaml` gets this block added during
-> deploy; if you are starting from scratch, add it before building.
+> full set of keys and their defaults. If yours doesn't have the block yet, add
+> it before building.
 >
 > **TV bias hold (`circadian_daemon.bias`):** if you enable the **control-file**
 > trigger source (`bias.triggers.control_file`), its `on_file`/`off_file` must land
@@ -45,11 +45,11 @@ Throughout this document, substitute `<share>` with the actual share name
 
 The NAS keeps a plain **build context** at `$HUE_IAC_HOME/build/` (Dockerfile,
 `hue_iac/`, `pyproject.toml`, `README.md`) — **not a git clone** (the live deploy
-has no `src/` checkout; source is copied in from the dev machine). From the Mac,
+has no `src/` checkout; source is copied in from the dev machine). From your dev machine,
 sync the current `main` into it, then build over SSH:
 
 ```sh
-# On the Mac, from a clean checkout of origin/main:
+# On your dev machine, from a checkout of this repo at origin/main:
 rsync -r --delete hue_iac/ <user>@<nas>:/volume1/<share>/hue-iac/build/hue_iac/
 rsync pyproject.toml Dockerfile <user>@<nas>:/volume1/<share>/hue-iac/build/
 # (scp also works but needs -O — Synology has SFTP disabled.)
@@ -59,7 +59,7 @@ sudo /usr/local/bin/docker build -t hue-iac:latest /volume1/<share>/hue-iac/buil
 ```
 
 Alternatively, import a pre-built tarball via Container Manager UI:
-Container Manager → Image → Import → select the `.tar` file exported from the Mac.
+Container Manager → Image → Import → select the `.tar` file exported from your dev machine.
 
 ---
 
@@ -150,7 +150,7 @@ docker exec hue-circadian hue-iac -c /data/hue.yaml circadian resume
 
 ## Step 5 — Update the image
 
-Same as Step 1: re-sync the source from the Mac into `build/`, rebuild, then
+Same as Step 1: re-sync the source from your dev machine into `build/`, rebuild, then
 recreate the container:
 
 ```sh
@@ -169,8 +169,8 @@ sudo /usr/local/bin/docker rm -f hue-circadian
 |---------|--------------|-----|
 | Container exits immediately | Bad config / missing file mount | `docker logs hue-circadian` for the error |
 | SSE stream drops / reconnects | Bridge rebooted or LAN blip | Daemon auto-reconnects; monitor logs |
-| TLS pin mismatch | Bridge cert rotated | Refresh `.hue-pin.json` from the Mac, restart container |
-| `BLOCKED` on scene apply | Zone or scene not found | Run `hue-iac plan` on the Mac to diagnose |
+| TLS pin mismatch | Bridge cert rotated | Refresh `.hue-pin.json` from your dev machine, restart container |
+| `BLOCKED` on scene apply | Zone or scene not found | Run `hue-iac plan` from your dev machine to diagnose |
 
 ---
 
