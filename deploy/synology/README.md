@@ -7,7 +7,7 @@ nothing here needs a seasonal edit.
 ## Layout
 ```
 $HUE_IAC_HOME/            # e.g. /volume1/<share>/hue-iac
-  src/                    # git clone of hue-iac
+  src/                    # git clone of this repo
   .venv/                  # python3 -m venv; pip install -e ./src
   hue.yaml  .hue-key  .hue-pin.json  .hue-backup/
   bin/re-anchor.sh  logs/
@@ -17,7 +17,7 @@ $HUE_IAC_HOME/            # e.g. /volume1/<share>/hue-iac
 ```sh
 HUE_IAC_HOME=/volume1/<share>/hue-iac
 mkdir -p "$HUE_IAC_HOME" && cd "$HUE_IAC_HOME"
-git clone https://github.com/cnewkirk/hue-iac.git src
+git clone https://github.com/cnewkirk/hueman.git src
 python3 -m venv .venv
 .venv/bin/pip install -e ./src        # pulls requests, PyYAML, tzdata
 mkdir -p bin logs .hue-backup

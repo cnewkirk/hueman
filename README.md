@@ -5,7 +5,7 @@ circadian day cycle, TV-aware bias lighting, night motion guidance, a panic
 mode, and honoured manual overrides.
 
 > The CLI and Python package are currently named `hue-iac`; they will be renamed
-> to `hueman` before a public release. Everywhere you see `hue-iac` below, that's
+> to `hueman` in an upcoming release. Everywhere you see `hue-iac` below, that's
 > this project.
 
 You describe the desired state of your lights in a YAML file; `hue-iac` diffs it

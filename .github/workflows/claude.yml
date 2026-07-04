@@ -18,10 +18,14 @@ permissions:
 
 jobs:
   claude:
-    # Run on manual dispatch, or when an issue/PR comment mentions @claude.
+    # Run on manual dispatch, or when a repo owner/member/collaborator's
+    # issue/PR comment mentions @claude. The author gate matters on a public
+    # repo: without it, any passer-by comment could drive Claude (and spend
+    # the API key) with write permissions on this repo.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.comment.body, '@claude')
+      (contains(github.event.comment.body, '@claude') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
