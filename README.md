@@ -1,26 +1,46 @@
-# hue-iac
+# hueman
 
 Declarative, Terraform-style management of Philips Hue lighting — a sun-anchored
-circadian day cycle, TV-aware bias lighting, night motion guidance, and honoured
-manual overrides.
+circadian day cycle, TV-aware bias lighting, night motion guidance, a panic
+mode, and honoured manual overrides.
+
+> The CLI and Python package are currently named `hue-iac`; they will be renamed
+> to `hueman` before a public release. Everywhere you see `hue-iac` below, that's
+> this project.
 
 You describe the desired state of your lights in a YAML file; `hue-iac` diffs it
 against the bridge (`plan`), converges it (`apply`), and — for the behaviours a
 bridge can't run natively — ships a small resident **circadian daemon** that
-drives a zone smoothly along the solar curve and holds a TV-bias look while you
-watch. Built for the **Hue Bridge Pro** and its local **CLIP API v2**.
+drives a zone smoothly along the solar curve, holds a TV-bias look while you
+watch, and steps aside the moment you touch a dimmer. Built for the local
+**CLIP API v2**; the night-motion features use **Hue Bridge Pro MotionAware**.
 
-```
-hue-iac validate         # parse + validate the config (no bridge needed)
-hue-iac preview          # print the circadian colour curve for a day
-hue-iac plan             # show what apply would change (read-only)
-hue-iac apply            # converge the bridge's declarative state
-hue-iac circadian run    # run the circadian + TV-bias daemon (foreground)
-hue-iac circadian resume # clear a manual-override suspension out-of-band
-hue-iac watch            # legacy live motion controller (see Limitations)
-```
+## How it fits together
 
-## The three layers
+```mermaid
+flowchart LR
+    yaml["hue.yaml<br/>(desired state)"]
+
+    subgraph cli["hue-iac"]
+        plan["plan / apply<br/>(diff + converge)"]
+        daemon["circadian daemon<br/>(circadian run)"]
+    end
+
+    subgraph bridge["Hue Bridge (CLIP v2, local)"]
+        native["native state<br/>rooms · zones · smart scenes<br/>night-red MotionAware automation"]
+        lights(["your lights"])
+    end
+
+    tv["TV state<br/>probe · control file · scene"]
+
+    yaml --> plan
+    yaml --> daemon
+    plan -->|provision, idempotent| native
+    native --> lights
+    daemon -->|"curve tick every 60 s, 75 s fades"| lights
+    tv -.-> daemon
+    bridge -.->|SSE events| daemon
+```
 
 1. **`apply` provisions native bridge state** — rooms/zones, sensor sensitivity,
    a generated sun-anchored `smart_scene` day cycle (`circadian_scene:`),
@@ -30,75 +50,95 @@ hue-iac watch            # legacy live motion controller (see Limitations)
 2. **The circadian daemon** (`circadian run`) is the live runtime for what the
    bridge cannot express: it re-samples the solar-elevation curve every minute
    and drives one zone through a continuous colour/brightness drift (75 s
-   cross-fades over 60 s ticks — no visible steps), detects manual overrides by
-   settle-and-compare and steps back until you resume, and holds a **TV bias**
-   look on the viewing lights while the TV is on (detected by a TCP probe of the
-   TV, an SSE scene trigger, or a control file — OR-combined, debounced), snapping
-   them back to the room's curve seconds after it turns off.
+   cross-fades over 60 s ticks — no visible steps). If you dim or switch the
+   zone yourself it notices (settle-and-compare) and backs off until you resume.
+   While the TV is on it holds a **TV bias** look on your viewing lights
+   (detected by a TCP probe of the TV, a bridge scene trigger, or a control
+   file — OR-combined, debounced), snapping them back to the room's curve
+   seconds after it turns off. An optional **security mode** turns the whole
+   home into an escalating panic show (legible red alert, then hard-cut colour
+   chaos with a photosensitivity-safe brightness cap) until disarmed.
 3. **`watch`** is the older per-sensor motion runtime (`motion_policies:`). It
    predates the daemon and MotionAware; see Limitations before using it.
 
-## Architecture
+### A day under hueman
 
-The decision logic is isolated from all I/O so it is deterministic and fully
-unit-tested; the network surface is thin and replaceable.
+```mermaid
+timeline
+    title A day under hueman
+    sunrise : daemon wakes the zone : warm, ~2,650 K
+    morning : ramps brighter and cooler
+    solar noon : coolest point of the day : ~4,300 K at full brightness
+    evening : descends into golden hour
+    hand-off : zone fades off at the time you set : daemon goes idle
+    overnight : MotionAware night-red guidance : dim red on motion, auto-off
+```
 
-| Module | Responsibility |
-| --- | --- |
-| `config.py` | Parse + validate the YAML into typed, frozen dataclasses |
-| `sun.py` | NOAA sunrise/sunset + solar elevation for a location (`SolarCalculator`) |
-| `circadian.py` | Solar elevation → colour-temperature/brightness curve (`CircadianCurve`) |
-| `circadian_scene.py` | Samples the curve at ≤6 sun knee-times into the generated smart-scene steps |
-| `circadian_control.py` | Pure daemon state machine: drive window, settle-and-compare override detection (`CircadianController`) |
-| `bias_control.py` | Pure TV-bias core: per-light hold/drive/off decisions + debounced trigger aggregation |
-| `engine.py` | Pure motion/timing state machine for `watch` (`PolicyEngine`) |
-| `payload.py` | Decision output → CLIP request bodies, incl. sRGB → CIE xy |
-| `nightmotion.py` | Pure night-motion/scene helpers: scene bodies, automation transform, tolerant scene-look diff |
-| `reconcile.py` | Terraform-style plan/apply: `Planner` + area, sensitivity, smart-scene, circadian-scene, and night-motion reconcilers |
-| `state.py` | Index the live bridge (incl. MotionAware areas); resolve names → ids |
-| `client.py` | CLIP API v2 client |
-| `pin.py` | Trust-on-first-use TLS certificate pinning |
-| `circadian_daemon.py` | The resident daemon: curve ticks, SSE events, TV-bias triggers/probe |
-| `watch.py` | Legacy live runtime: bridge event stream → `PolicyEngine` → commands |
-| `cli.py` | The `hue-iac` command-line interface |
+## The commands
+
+```
+hue-iac -c my-home.yaml validate         # parse + validate the config (no bridge needed)
+hue-iac -c my-home.yaml preview          # print the circadian colour curve for a day
+hue-iac -c my-home.yaml inventory        # list everything on your bridge, by name
+hue-iac -c my-home.yaml plan             # show what apply would change (read-only)
+hue-iac -c my-home.yaml apply            # converge the bridge to the declared state
+hue-iac -c my-home.yaml circadian run    # run the circadian + TV-bias daemon (foreground)
+hue-iac -c my-home.yaml circadian resume # clear a manual-override suspension out-of-band
+hue-iac -c my-home.yaml security on|off  # arm / disarm the panic show
+hue-iac -c my-home.yaml watch            # legacy live motion controller (see Limitations)
+```
+
+`-c` defaults to `./hue.yaml` if you omit it.
 
 ## Install
 
 ```bash
-cd hue-iac
-python3 -m pip install -e .        # installs the `hue-iac` console script
-# or just: python3 -m pip install requests pyyaml
+git clone https://github.com/cnewkirk/hueman && cd hueman
+python3 -m pip install -e .          # installs the `hue-iac` console script
+# contributors: python3 -m pip install -e ".[dev]" && python3 -m pytest
 ```
 
-Requires Python 3.10+. Run the tests with `python3 -m pytest`.
+Requires Python 3.10+.
 
 ## First-time setup
 
-1. **Find your bridge IP** (Hue app → Settings → My Hue System → your bridge),
-   and put it in the config `bridge.host` or `export HUE_BRIDGE_HOST=...`.
-2. **Pair** — press the bridge's physical link button, then:
+1. **Copy the example config** and make it yours:
    ```bash
-   hue-iac auth
+   cp examples/home.yaml my-home.yaml
    ```
-   It prints an application key. Store it as an environment variable so it never
-   lands in the config file:
+2. **Point it at your bridge** — find the bridge IP in the Hue app
+   (Settings → My Hue System → your bridge) and set `bridge.host` in
+   `my-home.yaml` (or `export HUE_BRIDGE_HOST=...`).
+3. **Pair** — press the bridge's physical link button, then:
+   ```bash
+   hue-iac -c my-home.yaml auth
+   ```
+   It prints an application key. Keep it in an environment variable so it never
+   lands in a file:
    ```bash
    export HUE_APPLICATION_KEY=<the key it printed>
    ```
-3. **Validate and preview** (no bridge calls):
+4. **See what you have** — list your real lights, rooms, zones, and motion
+   areas by name, then edit `my-home.yaml`'s `areas:` (and light names
+   throughout) to match your home:
    ```bash
-   hue-iac -c examples/home.yaml validate
-   hue-iac -c examples/home.yaml preview
+   hue-iac -c my-home.yaml inventory
    ```
-4. **Plan and apply**:
+5. **Validate and preview** (no bridge writes):
    ```bash
-   hue-iac -c examples/home.yaml plan
-   hue-iac -c examples/home.yaml apply
+   hue-iac -c my-home.yaml validate
+   hue-iac -c my-home.yaml preview     # prints your circadian curve for today
    ```
-5. **Run the daemon** (foreground; use Docker/systemd to keep it up — a Synology
+6. **Plan, then apply** — `plan` is read-only and shows exactly what `apply`
+   would change; nothing touches the bridge until you apply:
+   ```bash
+   hue-iac -c my-home.yaml plan
+   hue-iac -c my-home.yaml apply
+   ```
+7. **Run the daemon** (foreground; use Docker/systemd to keep it up — a Synology
    Docker runbook lives in `deploy/synology/README-docker.md`):
    ```bash
-   hue-iac -c examples/home.yaml circadian run
+   hue-iac -c my-home.yaml circadian run
    ```
 
 ## TLS
@@ -162,14 +202,25 @@ Key sections:
   (`mode: night_only` when the daemon owns the day; three timeslots are emitted —
   night start, a 00:00 clone for the small hours, and an actionless `day_start`
   slot that keeps the wrapped night slot from governing dark evenings).
+- `security` — the daemon-native panic mode: alert/chaos tuning, a hard
+  photosensitivity floor on luminance flashing, arm/disarm triggers, and a
+  decoupled sound-cue contract for an external audio adapter.
 - `motion_policies` — per-sensor policies for the legacy `watch` runtime.
+
+## What needs which hardware
+
+- `plan`/`apply` areas, smart scenes, the circadian daemon, TV bias, and
+  security mode work on any **CLIP v2** bridge (square Hue bridge or Bridge Pro).
+- `night_motion` and motion-area inventory need a **Hue Bridge Pro** running
+  **MotionAware** (motion sensed by the bulb grid — no PIR sensors required).
+- The legacy `watch` runtime needs old-style PIR **Hue motion sensors**.
 
 ## Limitations and notes
 
-- The pure decision layer (engine, circadian, daemon controller, bias, sun,
-  config, reconcile, nightmotion) is covered by ~240 unit tests. `client`,
-  `pin`, and the daemon's I/O shell talk to a real bridge and should be
-  exercised on your network.
+- The pure decision layer (config, sun, circadian, daemon controller, bias,
+  security, engine, reconcile, nightmotion) is covered by 300+ unit tests.
+  `client`, `pin`, and the daemon's I/O shell talk to a real bridge and should
+  be exercised on your network.
 - **`watch` is legacy and known-inadequate against current bridge firmware**:
   its echo-buffer override detection predates the bridge's periodic re-emission
   of settled `grouped_light` values, which it can misread as manual overrides,
@@ -179,3 +230,43 @@ Key sections:
 - The daemon runs in the foreground; pair it with Docker (`--restart always`),
   `systemd`, or similar. On a manual override it suspends until a power-cycle of
   the zone, `hue-iac circadian resume`, or the daily safety resume.
+- Security mode's chaos runs over the REST API, which rate-limits under load —
+  the show degrades gracefully (the daemon logs drop stats). True per-frame
+  control would need the Entertainment streaming API.
+
+## Architecture (for contributors)
+
+The decision logic is isolated from all I/O so it is deterministic and fully
+unit-tested; the network surface is thin and replaceable.
+
+<details>
+<summary>Module map</summary>
+
+| Module | Responsibility |
+| --- | --- |
+| `config.py` | Parse + validate the YAML into typed, frozen dataclasses |
+| `sun.py` | NOAA sunrise/sunset + solar elevation for a location (`SolarCalculator`) |
+| `circadian.py` | Solar elevation → colour-temperature/brightness curve (`CircadianCurve`) |
+| `circadian_scene.py` | Samples the curve at ≤6 sun knee-times into the generated smart-scene steps |
+| `circadian_control.py` | Pure daemon state machine: drive window, settle-and-compare override detection (`CircadianController`) |
+| `bias_control.py` | Pure TV-bias core: per-light hold/drive/off decisions + debounced trigger aggregation |
+| `security_control.py` | Pure security-mode core: alert breathe → luminance-capped chaos frames |
+| `engine.py` | Pure motion/timing state machine for `watch` (`PolicyEngine`) |
+| `payload.py` | Decision output → CLIP request bodies, incl. sRGB → CIE xy |
+| `nightmotion.py` | Pure night-motion/scene helpers: scene bodies, automation transform, tolerant scene-look diff |
+| `reconcile.py` | Terraform-style plan/apply: `Planner` + area, sensitivity, smart-scene, circadian-scene, and night-motion reconcilers |
+| `state.py` | Index the live bridge (incl. MotionAware areas); resolve names → ids |
+| `client.py` | CLIP API v2 client |
+| `pin.py` | Trust-on-first-use TLS certificate pinning |
+| `circadian_daemon.py` | The resident daemon: curve ticks, SSE events, TV-bias triggers, security show |
+| `watch.py` | Legacy live runtime: bridge event stream → `PolicyEngine` → commands |
+| `cli.py` | The `hue-iac` command-line interface |
+
+</details>
+
+Design docs for every major feature live in
+[`docs/superpowers/specs/`](docs/superpowers/specs/).
+
+## License
+
+[MIT](LICENSE).

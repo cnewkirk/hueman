@@ -1,13 +1,18 @@
 # ---------------------------------------------------------------------------
 # hue-iac example configuration
 #
-# Declarative desired state for a Hue Bridge Pro. Run:
-#   hue-iac -c examples/home.yaml validate       # check syntax
-#   hue-iac -c examples/home.yaml preview        # see the circadian curve
-#   hue-iac -c examples/home.yaml plan           # diff against the bridge
-#   hue-iac -c examples/home.yaml apply          # provision areas/scenes/night-red
-#   hue-iac -c examples/home.yaml circadian run  # run the circadian + TV-bias daemon
-#   hue-iac -c examples/home.yaml watch          # legacy motion controller
+# Copy this file (`cp examples/home.yaml my-home.yaml`), point bridge.host at
+# your bridge, and replace the light/room/zone names with yours — run
+# `hue-iac -c my-home.yaml inventory` to see what your bridge actually has.
+#
+# Declarative desired state for a Hue bridge (CLIP v2; night_motion needs a
+# Bridge Pro running MotionAware). Then:
+#   hue-iac -c my-home.yaml validate       # check syntax (no bridge needed)
+#   hue-iac -c my-home.yaml preview        # see the circadian curve
+#   hue-iac -c my-home.yaml plan           # diff against the bridge (read-only)
+#   hue-iac -c my-home.yaml apply          # provision areas/scenes/night-red
+#   hue-iac -c my-home.yaml circadian run  # run the circadian + TV-bias daemon
+#   hue-iac -c my-home.yaml watch          # legacy motion controller
 # ---------------------------------------------------------------------------
 
 bridge:
