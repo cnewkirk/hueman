@@ -30,7 +30,10 @@ set.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import logging
+import math
 import os
 import random
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +44,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -54,10 +58,12 @@ from .bias_control import (
 )
 from .circadian_control import CircadianController, DriveTo, FadeOff, Hold
 from .client import HueClient
-from .config import CircadianDaemonSpec, Config
+from .config import CircadianDaemonSpec, Config, RhythmSpec
 from .engine import TargetState
 from .errors import AuthError, BridgeError, ConfigError
 from .payload import GroupedLightCommand, LightCommand
+from .presence import ActivityEvent, PresenceTracker
+from .rhythm_control import AnchorStore, RhythmEngine, SignalState
 from .security_control import SecurityController, unknown_security_groups
 from .state import BridgeState
 from .sun import SolarCalculator
@@ -90,6 +96,7 @@ class CircadianDaemon:
     _security_sse_off_rid: str | None
     _security_rids: dict[str, str]
     _security_light_rids: tuple[str, ...]
+    _rhythm_motion_rooms: dict[str, str]
 
     def __init__(
         self,
@@ -156,6 +163,16 @@ class CircadianDaemon:
             self._rebuild_security_controller()
             self._security_sse_on_rid = self._resolve_resume_trigger(state, sec.sse_on)
             self._security_sse_off_rid = self._resolve_resume_trigger(state, sec.sse_off)
+        if config.rhythm is not None:
+            self._rhythm_motion_rooms = {
+                srid: (area.room_name or area.name)
+                for area in state.motion_areas
+                for srid in area.service_rids
+            }
+            if not self._rhythm_motion_rooms:
+                _LOG.warning(
+                    "rhythm: no MotionAware areas found on the bridge — presence "
+                    "inference will see only manual-override evidence")
         self._configure_logging(spec)
 
     @classmethod
@@ -191,6 +208,7 @@ class CircadianDaemon:
         spec = self._require_spec(config)
         loc = config.location
         solar = SolarCalculator(loc.lat, loc.lon, loc.tz_offset_hours, tz=loc.tz)
+        self._solar = solar
         self._client = client
         self._config = config
         self._spec = spec
@@ -255,6 +273,25 @@ class CircadianDaemon:
         self._security_rids = {}                      # group name -> grouped_light rid
         self._security_light_rids = ()                # member lights (chaos units)
         self._security_thread: threading.Thread | None = None
+        # --- rhythm engine (optional, observe stage only) ---
+        self._rhythm: RhythmSpec | None = config.rhythm
+        self._presence: PresenceTracker | None = None
+        self._rhythm_engine: RhythmEngine | None = None
+        self._rhythm_tz: ZoneInfo | None = None
+        self._rhythm_motion_rooms = {}   # *_area_motion service rid -> room
+        if self._rhythm is not None:
+            if self._rhythm.stage != "observe":
+                raise ConfigError(
+                    f"rhythm.stage {self._rhythm.stage!r} is not implemented yet; "
+                    "only 'observe' ships in stage 1 — see the rhythm design spec")
+            if loc.tz is None:
+                raise ConfigError(
+                    "rhythm requires location.tz (an IANA timezone name) for "
+                    "wall-clock day-phase reasoning; tz_offset_hours alone is not enough")
+            self._presence = PresenceTracker(self._rhythm.presence)
+            self._rhythm_tz = ZoneInfo(loc.tz)
+            self._rhythm_engine = RhythmEngine(
+                self._rhythm, self._load_anchor_store(), tz=loc.tz)
 
     def _rebuild_security_controller(self) -> None:
         """(Re)build the controller with the resolved member lights, so chaos
@@ -472,6 +509,11 @@ class CircadianDaemon:
             self._poll_control_file(now)
             if self._bias is not None:
                 self._apply_bias(now)
+            if self._rhythm is not None:
+                try:
+                    self._rhythm_tick(now)
+                except Exception as e:  # inference must never break the drive loop
+                    _LOG.warning("rhythm tick error: %s", e)
 
     def _apply_bias(self, now: float) -> None:
         """Drive each bias light per :func:`bias_actions` for this tick.
@@ -606,6 +648,93 @@ class CircadianDaemon:
             self._consume_flag(bias.file_on, lambda: self._bias_aggregator.on(now, "file"), "bias ON")
         if bias.file_off:
             self._consume_flag(bias.file_off, lambda: self._bias_aggregator.off(now, "file"), "bias OFF")
+
+    # -- rhythm engine (observe stage) --------------------------------------- #
+    def _load_anchor_store(self) -> AnchorStore:
+        """Load learned anchors from the state file; missing/corrupt = empty.
+
+        An unreadable store must never stop the daemon: learning restarts and
+        the engine falls back to config defaults (the spec's safety rail).
+        """
+        assert self._rhythm is not None  # only called when rhythm is configured
+        try:
+            with open(self._rhythm.state_file) as fh:
+                return AnchorStore.from_json(json.load(fh))
+        except (OSError, ValueError):
+            return AnchorStore()
+
+    def _read_alarm_epoch(self) -> float | None:
+        """Read the next-alarm signal file; garbage/0/missing/unset -> None."""
+        rhythm = self._rhythm
+        if rhythm is None or not rhythm.signals.next_alarm_file:
+            return None
+        try:
+            raw = open(rhythm.signals.next_alarm_file).read().strip()
+            value = float(raw)
+            return value if value > 0 else None
+        except (OSError, ValueError):
+            return None
+
+    def _phone_charging(self) -> bool:
+        """The charging signal file's existence means the phone is charging."""
+        rhythm = self._rhythm
+        if rhythm is None or not rhythm.signals.charging_file:
+            return False
+        try:
+            return os.path.exists(rhythm.signals.charging_file)
+        except OSError:  # pragma: no cover - filesystem-dependent
+            return False
+
+    def _rhythm_note_manual(self, now: float) -> None:
+        """Feed a detected manual override into presence as human evidence."""
+        if self._presence is None:
+            return
+        judgment = self._presence.feed(
+            ActivityEvent(room="", kind="light_change", ts=now))
+        _LOG.info("rhythm: manual light change -> human evidence (%s)", judgment.rule)
+
+    def _rhythm_tick(self, now: float) -> None:
+        """One observe-stage inference tick: decide, log evidence, persist.
+
+        Never writes to the bridge; a failure here must not disturb the
+        circadian tick, so callers wrap it (see :meth:`_tick_once`).
+        """
+        engine, presence, rhythm = self._rhythm_engine, self._presence, self._rhythm
+        if engine is None or presence is None or rhythm is None:
+            return
+        assert self._rhythm_tz is not None  # set together with the engine in _setup
+        # Sunset minute via the solar calculator (same source the curve uses);
+        # a polar infinite sunset falls back to 20:00.
+        local_date = _dt.datetime.fromtimestamp(now, tz=self._rhythm_tz).date()
+        sun = self._solar.sun_times(local_date)
+        sunset_min = float(sun.sunset_min) if math.isfinite(sun.sunset_min) else 20 * 60.0
+        signals = SignalState(
+            next_alarm_epoch=self._read_alarm_epoch(),
+            phone_charging=self._phone_charging(),
+            tv_on=bool(self._bias_aggregator.tv_on(now)) if self._bias is not None else False,
+            zone_on=self._cmd_on,
+            sunset_min=sunset_min,
+        )
+        decision = engine.tick(now, presence.summary(now), signals)
+        if decision.changed:
+            _LOG.info("rhythm: phase -> %s (%s) evidence=%s",
+                      decision.phase, decision.reason, json.dumps(decision.evidence))
+            self._persist_rhythm_state(now)
+
+    def _persist_rhythm_state(self, now: float) -> None:
+        """Atomically write anchors + snapshot to the state file."""
+        engine, rhythm = self._rhythm_engine, self._rhythm
+        if engine is None or rhythm is None:
+            return
+        doc: dict[str, object] = {"version": 1, "snapshot": engine.snapshot(now)}
+        doc.update(engine.store.to_json())  # {"anchors": ...} via the engine's store property
+        try:
+            tmp = rhythm.state_file + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(doc, fh, indent=2)
+            os.replace(tmp, rhythm.state_file)
+        except OSError as e:  # pragma: no cover - filesystem-dependent
+            _LOG.warning("rhythm state write failed for %s: %s", rhythm.state_file, e)
 
     def _consume_flag(self, path: str, action: Callable[[], None], label: str) -> None:
         """If ``path`` exists, run ``action`` and remove it (best-effort)."""
@@ -987,6 +1116,15 @@ class CircadianDaemon:
                     _LOG.info("resume trigger %s -> resumed", event.rid)
                     self._controller.on_resume(now)
                 return
+            if (self._presence is not None
+                    and event.rtype in ("convenience_area_motion", "security_area_motion")):
+                room = self._rhythm_motion_rooms.get(event.rid)
+                if room is not None and event.data.get("motion", {}).get("motion"):
+                    judgment = self._presence.feed(
+                        ActivityEvent(room=room, kind="motion", ts=now))
+                    _LOG.debug("rhythm: motion in %r -> human=%s (%s)",
+                               room, judgment.human, judgment.rule)
+                return
             if event.rtype != "grouped_light" or event.rid != self._rid:
                 return
             on_state = event.data.get("on", {}).get("on")
@@ -1000,6 +1138,7 @@ class CircadianDaemon:
                     if self._cmd_on and self._controller.mode != CircadianController.SUSPENDED:
                         _LOG.info("zone turned off -> suspended")
                         self._controller.on_external_change(now)
+                        self._rhythm_note_manual(now)
                     # else: cmd_on already False -> our own fade-off, ignore.
                 else:  # on_state is True
                     if (
@@ -1044,6 +1183,7 @@ class CircadianDaemon:
                     self._cmd_brightness,
                 )
                 self._controller.on_external_change(now)
+                self._rhythm_note_manual(now)
             else:
                 target_str = "?" if self._cmd_brightness is None else f"{self._cmd_brightness:.1f}%"
                 _LOG.debug(
