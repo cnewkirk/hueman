@@ -128,6 +128,19 @@ def test_weekend_day_class_used_for_records():
     assert store.median("sleep_onset", "weekday") is None
 
 
+def test_weekend_learned_wake_is_capped_by_drift_rule():
+    """A learned weekend wake later than weekday+cap is clamped to the cap."""
+    store = AnchorStore()
+    store.record("wake", "weekday", 420, "2026-07-01")   # 07:00
+    store.record("wake", "weekend", 600, "2026-07-04")   # 10:00 observed
+    eng = RhythmEngine(_spec(), store, tz=TZ)
+    # 2026-07-04 is a Saturday; day_class at Saturday noon is weekend
+    d = eng.tick(_epoch(4, 12, 0), ACTIVE, _sig())
+    # cap = weekday 420 + 90 drift = 510 (08:30), so 600 clamps to 510
+    assert d.evidence["wake_anchor_min"] == 510
+    assert d.evidence["wake_anchor_src"] == "learned-weekend"
+
+
 def test_snapshot_is_json_serialisable_and_carries_anchors():
     import json
     eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)

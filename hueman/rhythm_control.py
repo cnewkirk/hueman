@@ -270,7 +270,7 @@ class RhythmEngine:
         changed = phase != prev
         self._phase = phase
         if changed:
-            self._last_evidence = evidence
+            self._last_evidence = dict(evidence)
         return PhaseDecision(phase=phase, changed=changed, reason=reason, evidence=evidence)
 
     def _decide(
