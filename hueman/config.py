@@ -855,16 +855,12 @@ class CircadianDaemonSpec:
         mo = _as_dict(d.get("manual_override"), f"{ctx}.manual_override")
         retry = _as_dict(d.get("retry"), f"{ctx}.retry")
         log = _as_dict(d.get("log"), f"{ctx}.log")
-        hand_off = parse_time_ref(d.get("hand_off", "22:34"), ctx=f"{ctx}.hand_off")
-        if hand_off in ("sunrise", "sunset"):
-            raise ConfigError(f"{ctx}.hand_off must be a clock time like '22:34'")
-        hh, mm = hand_off.split(":")
         floor = d.get("brightness_floor")
         ceil = d.get("brightness_ceiling")
         return cls(
             zone=str(_require(d, "zone", ctx)),
             start=parse_anchor(d.get("start", "sunrise"), ctx=f"{ctx}.start"),
-            hand_off_min=int(hh) * 60 + int(mm),
+            hand_off_min=_clock_minute(d.get("hand_off", "22:34"), f"{ctx}.hand_off"),
             interval_ms=parse_duration(d.get("interval", "60s"), ctx=f"{ctx}.interval"),
             transition_ms=parse_duration(d.get("transition", "75s"), ctx=f"{ctx}.transition"),
             fade_off_ms=parse_duration(d.get("fade_off", "90s"), ctx=f"{ctx}.fade_off"),
