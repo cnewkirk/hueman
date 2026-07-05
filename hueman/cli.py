@@ -3,10 +3,17 @@
 Subcommands:
     auth      Pair with the bridge (press the link button) and print the key.
     validate  Parse and validate the config without touching the bridge.
+    inventory List the bridge's rooms, zones, lights and sensors.
     preview   Print the circadian colour curve for a date and location.
     plan      Show the changes apply would make (read-only).
     apply     Converge the bridge's declarative state to the config.
-    watch     Run the live motion/timing controller.
+    watch     Run the legacy live motion/timing controller.
+    circadian run|resume
+              Run the resident circadian daemon, or hand control back to a
+              running one after a manual-override suspension.
+    rhythm    Print the rhythm engine's phase, anchors, and evidence.
+    security on|off|status
+              Arm/disarm the daemon-native panic mode, or show its config.
 
 The interface mirrors Terraform's verbs deliberately: ``validate`` -> ``plan``
 -> ``apply`` is the same muscle memory, and ``plan`` never mutates anything.

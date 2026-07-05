@@ -142,6 +142,31 @@ night_motion:
     brightness: 3
 
 # ---------------------------------------------------------------------------
+# Closed-loop day-rhythm inference (stage 1: observe-only — no light control).
+# The daemon infers dawn/morning/.../sleep from MotionAware areas plus optional
+# phone signals, logs every inference with evidence, and learns wake/bed anchors.
+# Inspect with `hueman rhythm`. See README "Rhythm engine (observe stage)".
+# ---------------------------------------------------------------------------
+rhythm:
+  stage: "observe"
+  bedroom: "Bedroom"                 # room name whose motion anchors sleep/wake
+  bed_target: "23:00"
+  wake_default: "07:00"
+  weekend_drift_cap: "90m"
+  state_file: "/data/rhythm-state.json"
+  signals:
+    # Written by an external automation (e.g. Home Assistant):
+    # next_alarm_file contains the epoch seconds of the phone's next alarm;
+    # charging_file's existence means the phone is on the charger.
+    next_alarm_file: "/mnt/signals/.next-alarm"
+    charging_file: "/mnt/signals/.phone-charging"
+  presence:
+    quiet: "30m"
+    wake_confirm_events: 3
+    wake_confirm_window: "10m"
+    pet_progression: "5m"
+
+# ---------------------------------------------------------------------------
 # Legacy `watch` runtime (per-PIR-sensor motion policies). Predates the daemon
 # and MotionAware — see README "Limitations" before relying on it.
 # ---------------------------------------------------------------------------

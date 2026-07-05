@@ -175,6 +175,21 @@ Triggers (OR-combined, no arming): `hueman security on|off` (writes the
 adapter (e.g. Home Assistant) watches the cue file / webhook and plays the
 matching sound. That adapter is out of this repo's scope.
 
+## Rhythm engine — observe-stage day-phase inference
+
+`rhythm:` (optional, alongside `circadian_daemon:`) runs a closed-loop
+day-phase inference engine (`rhythm_control.py` + `presence.py`) inside the
+daemon: it infers `dawn`/`morning`/`daylight`/`evening`/`wind_down`/`night`/
+`sleep` from MotionAware motion (with pet discounting) plus optional phone
+signals, and learns wake/bed-time anchors over time. **Stage 1 (`stage:
+"observe"`) is read-only — it never writes to the bridge**; every inference is
+logged with a `rhythm:` prefix in the daemon log and persisted to
+`rhythm.state_file` (the path comes from config; delete it to reset
+learning). `stage: "mornings"` and `stage: "full"` parse but the daemon
+deliberately refuses to start with either — only `observe` ships in stage 1.
+See `docs/superpowers/specs/2026-07-04-rhythm-engine-design.md` and the
+README's "Rhythm engine (observe stage)" section.
+
 ## Architecture
 
 The codebase is split into a **pure decision layer** (fully unit-tested, no I/O) and a **thin I/O layer** (needs a real bridge):
@@ -193,6 +208,8 @@ The codebase is split into a **pure decision layer** (fully unit-tested, no I/O)
 | `engine.py` | Per-area state machine (`PolicyEngine`) for the legacy `watch` runtime. Consumes `MotionPolicy` + explicit `ts` floats; emits `Action` values. Four phases: `STANDBY`, `ACTIVE`, `DIMMING`, `OVERRIDDEN`. |
 | `payload.py` | Converts engine `TargetState` → CLIP v2 request bodies (sRGB `#rrggbb` → CIE xy). |
 | `nightmotion.py` | Pure night-motion helpers: builds CLIP `scene` bodies, transforms the MotionAware `behavior_instance`, and `scene_actions_match` (tolerant scene-look diff, reused by the circadian reconciler). |
+| `presence.py` | Pure pet-discounting activity judge for `rhythm` (`PresenceTracker`): light-change / progression / solo-motion rules, quiet-time and confirm-window summaries. |
+| `rhythm_control.py` | Pure day-phase state machine for `rhythm` (`RhythmEngine`, `AnchorStore`, observe stage): phase transitions, sleep vote, wake confirmation, learned wake/bed anchors. |
 | `reconcile.py` | Terraform-style planner. `Planner` runs `AreaReconciler` (room/zone membership), `SensitivityReconciler` (sensor sensitivity), `SmartSceneReconciler` (re-time an existing scene), `CircadianSceneReconciler` (generate the smooth circadian cycle), and `NightMotionReconciler` (night soft-red guidance). `Change.change_type` is one of `CREATE`, `UPDATE`, `NOOP`, `BLOCKED`. |
 
 ### I/O layer
@@ -202,9 +219,9 @@ The codebase is split into a **pure decision layer** (fully unit-tested, no I/O)
 | `client.py` | CLIP API v2 HTTP client (`HueClient`). |
 | `pin.py` | Trust-on-first-use TLS pinning (SHA-256 of bridge cert → `.hue-pin.json`). |
 | `state.py` | Loads live bridge state; resolves resource names → ids (`BridgeState`), including MotionAware areas/services. |
-| `circadian_daemon.py` | The resident daemon (`CircadianDaemon`): 60s curve ticks + SSE event loop + TV-bias triggers (probe thread / SSE / control files) + security show, all serialised under one lock. |
+| `circadian_daemon.py` | The resident daemon (`CircadianDaemon`): 60s curve ticks + SSE event loop + TV-bias triggers (probe thread / SSE / control files) + security show + rhythm-engine ticks, all serialised under one lock. |
 | `watch.py` | **Legacy** SSE event loop (`MotionController`) for `motion_policies`. Its echo-buffer override detection predates the bridge's periodic re-emission of settled values (the daemon's settle-and-compare replaced it), and it requires legacy PIR sensors. |
-| `cli.py` | `argparse`-based CLI (`Cli`). Subcommands: `auth`, `validate`, `preview`, `inventory`, `plan`, `apply`, `circadian run\|resume`, `security on\|off\|status`, `watch`. |
+| `cli.py` | `argparse`-based CLI (`Cli`). Subcommands: `auth`, `validate`, `inventory`, `preview`, `plan`, `apply`, `watch`, `circadian run\|resume`, `rhythm`, `security on\|off\|status`. |
 
 ### Data flow
 
