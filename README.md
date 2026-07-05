@@ -132,8 +132,8 @@ also installs (the project's former name); it will be removed in a future releas
    hueman -c my-home.yaml plan
    hueman -c my-home.yaml apply
    ```
-7. **Run the daemon** (foreground; use Docker/systemd to keep it up — a Synology
-   Docker runbook lives in `deploy/synology/README-docker.md`):
+7. **Run the daemon** (foreground; deployment runbook — docker run, compose,
+   or systemd — in `deploy/README.md`, Synology notes in `deploy/synology/`):
    ```bash
    hueman -c my-home.yaml circadian run
    ```
@@ -175,8 +175,8 @@ Set `location.tz` to an IANA zone (e.g. `America/Los_Angeles`) and the sun math
 tracks DST automatically — no twice-a-year `tz_offset_hours` edit. The daemon
 re-derives the curve from the sun continuously; the *native* smart-scene path
 (`circadian_scene:`) re-anchors whenever `apply` runs, so if you use it without
-the daemon, schedule a daily `apply` (cron wrapper in `deploy/synology/`,
-superseded by the Docker daemon runbook when the daemon is in use).
+the daemon, schedule a daily `apply` (see "No daemon?" in `deploy/README.md`;
+superseded by the daemon when the daemon is in use).
 
 ## Config reference
 
@@ -225,7 +225,8 @@ Key sections:
   MotionAware. The daemon's settle-and-compare detection is the current design.
   `watch --dry-run` logs intended commands without sending them.
 - The daemon runs in the foreground; pair it with Docker (`--restart always`),
-  `systemd`, or similar. On a manual override it suspends until a power-cycle of
+  `systemd`, or similar — see `deploy/README.md`. On a manual override it
+  suspends until a power-cycle of
   the zone, `hueman circadian resume`, or the daily safety resume.
 - Security mode's chaos runs over the REST API, which rate-limits under load —
   the show degrades gracefully (the daemon logs drop stats). True per-frame

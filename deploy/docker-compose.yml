@@ -1,0 +1,18 @@
+# Circadian daemon via docker compose. Read deploy/README.md first — every
+# mount/env choice here is explained in "What every deployment needs".
+# Edit the /srv/hueman paths and the env_file location, then:  docker compose up -d
+services:
+  hue-circadian:
+    container_name: hue-circadian
+    build: ..                       # build from this checkout; no published image
+    restart: always
+    network_mode: host              # long-lived SSE stream to the bridge; avoids NAT drops
+    volumes:
+      - /srv/hueman/hue.yaml:/data/hue.yaml:ro
+      - /srv/hueman/.hue-pin.json:/data/.hue-pin.json:ro   # pre-pin with `hueman auth` first
+      - /srv/hueman/logs:/data/logs
+      # TV-bias control-file trigger only: a directory the signaller (e.g. Home
+      # Assistant) also mounts. Paths inside must match your hue.yaml.
+      # - /srv/hueman/tv-signal:/data/tvsig
+    env_file:
+      - /srv/hueman/hueman.env      # single line: HUE_APPLICATION_KEY=<key>  (chmod 600)

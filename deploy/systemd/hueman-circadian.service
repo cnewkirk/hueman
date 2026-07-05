@@ -1,0 +1,22 @@
+# Circadian daemon as a bare-metal systemd service (no Docker).
+# Read deploy/README.md ("Bare metal: venv + systemd") for the setup steps.
+# Install: copy to /etc/systemd/system/, edit paths, then
+#   systemctl daemon-reload && systemctl enable --now hueman-circadian
+[Unit]
+Description=hueman circadian daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hueman
+# Holds hue.yaml, .hue-pin.json, and logs/ — the daemon resolves its
+# relative paths (log file, resume file) from this directory.
+WorkingDirectory=/var/lib/hueman
+# Single line: HUE_APPLICATION_KEY=<key>   (chmod 600, owned by root)
+EnvironmentFile=/etc/hueman/hueman.env
+ExecStart=/opt/hueman/.venv/bin/hueman -c hue.yaml circadian run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
