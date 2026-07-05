@@ -24,6 +24,11 @@ from .presence import PresenceSummary
 #: Newest observations kept per (kind, day-class); two weeks of weekdays.
 _MAX_SAMPLES = 14
 
+#: Wake evidence only counts within this many minutes before the dawn window
+#: opens; earlier sustained motion is a night waking (bathroom trip), not a
+#: wake, and must not poison the learned wake anchor.
+_EARLY_WAKE_MARGIN_MIN = 120
+
 
 class AnchorStore:
     """Recent observed wake / sleep-onset minutes, per weekday/weekend class.
@@ -141,8 +146,11 @@ class RhythmEngine:
     ``dawn``/``sleep`` (→ ``morning``); and after midnight the same wake
     evidence also ends ``night`` (→ ``morning``) — the escape hatch for a
     restart during actual sleep, which seeds ``night`` and (with the
-    human-seen gate on the sleep vote) can never reach ``sleep``. All
-    thresholds come from the spec;
+    human-seen gate on the sleep vote) can never reach ``sleep``. In both
+    the ``sleep`` and ``night`` cases the evidence only counts when the
+    minute is plausibly morning (within ``_EARLY_WAKE_MARGIN_MIN`` of the
+    dawn window opening); earlier sustained motion is a *night waking* —
+    logged in the evidence but ignored. All thresholds come from the spec;
     learned anchors refine them but never move outside spec bounds.
 
     Args:
@@ -268,6 +276,17 @@ class RhythmEngine:
             "bedroom_involved": self._spec.bedroom in presence.recent_rooms,
         }
 
+    def _wake_plausible(self, minute: float, wake_anchor: float) -> bool:
+        """Whether sustained motion at this minute may count as the day's wake.
+
+        True only in the morning half of the day, no earlier than
+        ``_EARLY_WAKE_MARGIN_MIN`` before the dawn window opens; anything
+        earlier is a night waking (a bathroom trip), not a wake, and must
+        not poison the learned wake anchor.
+        """
+        floor = wake_anchor - self._spec.dawn_lead_min - _EARLY_WAKE_MARGIN_MIN
+        return minute < 720 and minute >= floor
+
     # -- tick ---------------------------------------------------------------- #
     def tick(self, now: float, presence: PresenceSummary, signals: SignalState) -> PhaseDecision:
         """Advance at most one phase; return the decision with evidence."""
@@ -318,9 +337,13 @@ class RhythmEngine:
             evidence.update(wake_ev)
             in_dawn_window = wake_anchor - spec.dawn_lead_min <= minute < wake_anchor
             if woke:
-                self._record_wake(local, minute)
-                self._morning_started_min = minute
-                return self.MORNING, "wake-detected"
+                # Sustained motion only counts as the wake when the clock is
+                # plausibly morning; a 01:30 bathroom trip is a night waking.
+                if self._wake_plausible(minute, wake_anchor):
+                    self._record_wake(local, minute)
+                    self._morning_started_min = minute
+                    return self.MORNING, "wake-detected"
+                evidence["night_waking"] = True
             if in_dawn_window:
                 return self.DAWN, "dawn-window"
             return self.SLEEP, "hold"
@@ -366,13 +389,17 @@ class RhythmEngine:
             if self._phase == self.NIGHT and minute < 720:
                 # Morning escape: a restart during actual sleep seeds NIGHT
                 # and (human-seen gate) can never reach SLEEP, so NIGHT must
-                # hand off to MORNING itself when the human gets up.
+                # hand off to MORNING itself when the human gets up. Same
+                # plausibly-morning gate as SLEEP: pre-margin sustained
+                # motion is a night waking, not a wake.
                 woke, wake_ev = self._wake_evidence(presence)
                 evidence.update(wake_ev)
                 if woke:
-                    self._record_wake(local, minute)
-                    self._morning_started_min = minute
-                    return self.MORNING, "wake-detected"
+                    if self._wake_plausible(minute, wake_anchor):
+                        self._record_wake(local, minute)
+                        self._morning_started_min = minute
+                        return self.MORNING, "wake-detected"
+                    evidence["night_waking"] = True
             if self._phase == self.WIND_DOWN and m_shift >= night_start:
                 return self.NIGHT, "bed-anchor"
             return self._phase, "hold"

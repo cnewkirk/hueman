@@ -204,6 +204,29 @@ def test_overnight_restart_wakes_from_night():
     assert store.median("wake", "weekday") == 6 * 60 + 50
 
 
+def test_night_bathroom_trip_does_not_count_as_wake():
+    """Sustained 01:30 motion during SLEEP is a night waking, not a wake."""
+    store = AnchorStore()
+    eng = RhythmEngine(_spec(), store, tz=TZ)
+    eng.tick(_epoch(1, 23, 1), ACTIVE, _sig())
+    eng.tick(_epoch(1, 23, 50), QUIET, _sig(zone_on=False))      # -> SLEEP
+    d = eng.tick(_epoch(2, 1, 30), BEDROOM_BURST, _sig(zone_on=False))
+    assert d.phase == RhythmEngine.SLEEP
+    assert d.evidence.get("night_waking") is True
+    assert store.median("wake", "weekday") is None
+
+
+def test_early_real_wake_within_margin_still_counts():
+    """05:30 sustained motion with a 07:00 anchor is inside the margin."""
+    store = AnchorStore()
+    eng = RhythmEngine(_spec(), store, tz=TZ)
+    eng.tick(_epoch(1, 23, 1), ACTIVE, _sig())
+    eng.tick(_epoch(1, 23, 50), QUIET, _sig(zone_on=False))      # -> SLEEP
+    d = eng.tick(_epoch(2, 5, 30), BEDROOM_BURST, _sig(zone_on=False))
+    assert d.phase == RhythmEngine.MORNING
+    assert store.median("wake", "weekday") == 330
+
+
 def test_anchor_day_class_boundaries():
     """The wake anchor is classed by the upcoming morning, not the onset rule.
 

@@ -231,12 +231,16 @@ event-driven exceptions:
 - **Confirmed wake evidence** ends `dawn`/`sleep` and starts `morning`: enough
   motion (`presence.wake_confirm_events` events, or 2+ distinct rooms) within
   `presence.wake_confirm_window`, plus the bedroom being involved or a light
-  change — so a hallway cat patrol can't read as "awake." A missed wake
+  change — so a hallway cat patrol can't read as "awake." Wake evidence only
+  counts when the clock is plausibly morning (from ~2h before the dawn window
+  opens): a 01:30 bathroom trip is logged as a night waking and ignored, so it
+  can't poison the learned wake anchor. A missed wake
   (alarm passed, no motion) force-advances to `morning` after two hours as a
   failsafe.
-- After midnight, the same wake evidence also ends `night` and starts
-  `morning` — the escape hatch for a restart during sleep, which seeds
-  `night` and (per the human-seen gate above) can never reach `sleep`.
+- After midnight, the same wake evidence (same plausibly-morning gate) also
+  ends `night` and starts `morning` — the escape hatch for a restart during
+  sleep, which seeds `night` and (per the human-seen gate above) can never
+  reach `sleep`.
 
 `wind_down` starts `wind_down_lead` before `bed_target`; `dawn` starts
 `dawn_lead` before the wake anchor, which resolves in order: a phone alarm due
