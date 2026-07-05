@@ -61,6 +61,14 @@ def test_summary_windows():
     assert s2.recent_motion_count == 0 and s2.recent_rooms == ()
 
 
+def test_roomless_motion_cannot_be_progression():
+    """Motion with no room attribution never proves room-to-room movement."""
+    tr = PresenceTracker(SPEC)
+    tr.feed(_motion("Kitchen", T0))
+    j = tr.feed(_motion("", T0 + 60))
+    assert j.human is False and j.rule == "solo-motion"
+
+
 def test_quiet_is_since_last_human_not_last_pet():
     tr = PresenceTracker(SPEC)
     tr.feed(_motion("Bedroom", T0))

@@ -118,7 +118,7 @@ class PresenceTracker:
                 break
             if prior.kind == "light_change":
                 return Judgment(event, human=True, rule="light-change-context")
-            if prior.kind == "motion" and prior.room and prior.room != event.room:
+            if event.room and prior.kind == "motion" and prior.room and prior.room != event.room:
                 return Judgment(event, human=True, rule="progression")
         return Judgment(event, human=False, rule="solo-motion")
 
