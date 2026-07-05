@@ -144,7 +144,7 @@ night_motion:
 # ---------------------------------------------------------------------------
 # Closed-loop day-rhythm inference (stage 1: observe-only — no light control).
 # The daemon infers dawn/morning/.../sleep from MotionAware areas plus optional
-# phone signals, logs every inference with evidence, and learns wake/bed anchors.
+# phone signals, logs every phase change with evidence, and learns wake/bed anchors.
 # Inspect with `hueman rhythm`. See README "Rhythm engine (observe stage)".
 # ---------------------------------------------------------------------------
 rhythm:

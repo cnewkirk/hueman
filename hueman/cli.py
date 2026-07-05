@@ -1,12 +1,12 @@
 """Command-line interface for hueman.
 
 Subcommands:
-    auth      Pair with the bridge (press the link button) and print the key.
     validate  Parse and validate the config without touching the bridge.
+    auth      Pair with the bridge (press the link button) and print the key.
     inventory List the bridge's rooms, zones, lights and sensors.
-    preview   Print the circadian colour curve for a date and location.
     plan      Show the changes apply would make (read-only).
     apply     Converge the bridge's declarative state to the config.
+    preview   Print the circadian colour curve for a date and location.
     watch     Run the legacy live motion/timing controller.
     circadian run|resume
               Run the resident circadian daemon, or hand control back to a

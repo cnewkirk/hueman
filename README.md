@@ -211,8 +211,8 @@ Key sections:
 `rhythm:` runs a closed-loop day-phase inference engine inside the circadian
 daemon: it watches MotionAware motion (in your bedroom and elsewhere) plus
 optional phone signals, infers which phase of your day you're in, logs every
-inference with its evidence, and learns your real wake/bed-time anchors over
-time.
+phase change with its evidence, and learns your real wake/bed-time anchors
+over time.
 
 **Stage 1 ("observe") never writes to the bridge.** It's a read-only shadow
 layer — nothing it infers changes what your lights do. The config accepts
@@ -253,8 +253,10 @@ anchors or config defaults.
 **Pet discounting.** MotionAware areas report presence, not identity. In a
 one-human-plus-pets home: a light change always counts as human (pets don't
 use switches); motion counts as human when a *different* room was active
-within `presence.pet_progression` minutes (room-to-room movement); solo
-single-room motion is otherwise discounted as a pet. Known blind spot: a human
+within `presence.pet_progression` minutes (room-to-room movement) **or** when
+any light change happened within that same window (a human is clearly up and
+about); solo single-room motion is otherwise discounted as a pet. Known blind
+spot: a human
 sitting nearly still in one room for a long stretch degrades to "pet"
 judgments — but the sleep vote that consumes this signal also requires
 lights-out and TV-off, so a reader with a lamp on is never mistaken for an
@@ -277,10 +279,11 @@ learned anchors plus the latest snapshot, written atomically after every
 phase change. Delete it to reset learning — the engine falls back to config
 defaults until it re-learns.
 
-**Debugging.** Every inference is logged with a `rhythm:` prefix — grep the
-daemon log for it to see phase transitions with full evidence, manual
-overrides fed in as human activity, and (at debug level) per-event motion
-judgments.
+**Debugging.** Evidence lines carry a `rhythm:` prefix — grep the daemon log
+for it. Every phase *change* is logged at INFO with its full evidence dict
+(and rewrites the state file); manual overrides fed in as human activity also
+log at INFO; individual per-event motion judgments appear at DEBUG; quiet
+"hold" ticks that change nothing are silent.
 
 ## What needs which hardware
 

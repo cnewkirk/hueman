@@ -182,13 +182,14 @@ day-phase inference engine (`rhythm_control.py` + `presence.py`) inside the
 daemon: it infers `dawn`/`morning`/`daylight`/`evening`/`wind_down`/`night`/
 `sleep` from MotionAware motion (with pet discounting) plus optional phone
 signals, and learns wake/bed-time anchors over time. **Stage 1 (`stage:
-"observe"`) is read-only — it never writes to the bridge**; every inference is
-logged with a `rhythm:` prefix in the daemon log and persisted to
-`rhythm.state_file` (the path comes from config; delete it to reset
-learning). `stage: "mornings"` and `stage: "full"` parse but the daemon
-deliberately refuses to start with either — only `observe` ships in stage 1.
-See `docs/superpowers/specs/2026-07-04-rhythm-engine-design.md` and the
-README's "Rhythm engine (observe stage)" section.
+"observe"`) is read-only — it never writes to the bridge.** Evidence lines
+carry a `rhythm:` prefix in the daemon log: every phase *change* logs at INFO
+with its full evidence dict and rewrites `rhythm.state_file` (the path comes
+from config; delete it to reset learning); individual motion judgments appear
+at DEBUG; unchanged "hold" ticks are silent. `stage: "mornings"` and `stage:
+"full"` parse but the daemon deliberately refuses to start with either — only
+`observe` ships in stage 1. See the README's "Rhythm engine (observe stage)"
+section (the design spec lives in the deployment/ops repository, not here).
 
 ## Architecture
 
@@ -221,7 +222,7 @@ The codebase is split into a **pure decision layer** (fully unit-tested, no I/O)
 | `state.py` | Loads live bridge state; resolves resource names → ids (`BridgeState`), including MotionAware areas/services. |
 | `circadian_daemon.py` | The resident daemon (`CircadianDaemon`): 60s curve ticks + SSE event loop + TV-bias triggers (probe thread / SSE / control files) + security show + rhythm-engine ticks, all serialised under one lock. |
 | `watch.py` | **Legacy** SSE event loop (`MotionController`) for `motion_policies`. Its echo-buffer override detection predates the bridge's periodic re-emission of settled values (the daemon's settle-and-compare replaced it), and it requires legacy PIR sensors. |
-| `cli.py` | `argparse`-based CLI (`Cli`). Subcommands: `auth`, `validate`, `inventory`, `preview`, `plan`, `apply`, `watch`, `circadian run\|resume`, `rhythm`, `security on\|off\|status`. |
+| `cli.py` | `argparse`-based CLI (`Cli`). Subcommands: `validate`, `auth`, `inventory`, `plan`, `apply`, `preview`, `watch`, `circadian run\|resume`, `rhythm`, `security on\|off\|status`. |
 
 ### Data flow
 
