@@ -30,6 +30,13 @@ def test_capped_at_14_newest_kept():
     assert samples[0]["date"] == "2026-06-07"  # oldest surviving
 
 
+def test_median_of_even_count_rounds_to_nearest_minute():
+    st = AnchorStore()
+    st.record("wake", "weekday", 420, "2026-07-01")
+    st.record("wake", "weekday", 425, "2026-07-02")
+    assert st.median("wake", "weekday") == 422  # 422.5 rounds half-to-even
+
+
 def test_json_roundtrip():
     st = AnchorStore()
     st.record("sleep_onset", "weekend", 1400, "2026-07-04")

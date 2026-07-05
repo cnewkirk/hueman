@@ -49,11 +49,15 @@ class AnchorStore:
         del bucket[:-_MAX_SAMPLES]
 
     def median(self, kind: str, day_class: str) -> int | None:
-        """Median observed minute for the pair, or ``None`` with no samples."""
+        """Median observed minute for the pair, or ``None`` with no samples.
+
+        The midpoint of an even sample count rounds to the nearest minute.
+        """
         bucket = self._samples.get(day_class, {}).get(kind, [])
         if not bucket:
             return None
-        return int(median(s["minute"] for s in bucket))
+        minutes: list[int] = [int(s["minute"]) for s in bucket]
+        return round(median(minutes))
 
     def to_json(self) -> dict[str, Any]:
         """Serialise to the persisted document shape."""
