@@ -13,7 +13,7 @@ from malfunction.
 from __future__ import annotations
 
 import datetime as _dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -136,9 +136,13 @@ class RhythmEngine:
 
     Phases move forward only (one step per tick) through
     ``dawn → morning → daylight → evening → wind_down → night → sleep`` with
-    two event-driven exceptions: the sleep vote can end an evening early
-    (``wind_down``/``night`` → ``sleep``) and confirmed wake evidence ends
-    ``dawn``/``sleep`` (→ ``morning``). All thresholds come from the spec;
+    three event-driven exceptions: the sleep vote can end an evening early
+    (``wind_down``/``night`` → ``sleep``); confirmed wake evidence ends
+    ``dawn``/``sleep`` (→ ``morning``); and after midnight the same wake
+    evidence also ends ``night`` (→ ``morning``) — the escape hatch for a
+    restart during actual sleep, which seeds ``night`` and (with the
+    human-seen gate on the sleep vote) can never reach ``sleep``. All
+    thresholds come from the spec;
     learned anchors refine them but never move outside spec bounds.
 
     Args:
@@ -198,6 +202,11 @@ class RhythmEngine:
         """Day class of a wake observation (the date it happened)."""
         return "weekend" if local.weekday() >= 5 else "weekday"
 
+    def _anchor_day_class(self, local: _dt.datetime) -> str:
+        """Day class of the *upcoming* wake: today before noon, else tomorrow."""
+        date = local.date() if local.hour < 12 else local.date() + _dt.timedelta(days=1)
+        return "weekend" if date.weekday() >= 5 else "weekday"
+
     # -- anchors ----------------------------------------------------------- #
     def _wake_anchor_min(self, now: float, signals: SignalState) -> tuple[float, str]:
         """Tomorrow-or-today's wake anchor minute and its source label.
@@ -210,7 +219,7 @@ class RhythmEngine:
             alarm_local = self._local(signals.next_alarm_epoch)
             return self._minute(alarm_local), "alarm"
         local = self._local(now)
-        day_class = self._day_class(local)
+        day_class = self._anchor_day_class(local)
         learned = self._store.median("wake", day_class)
         if learned is not None:
             if day_class == "weekend":
@@ -223,13 +232,20 @@ class RhythmEngine:
 
     # -- votes ------------------------------------------------------------- #
     def _sleep_vote(self, presence: PresenceSummary, signals: SignalState) -> tuple[bool, dict[str, Any]]:
-        """The sleep-onset confidence vote and its evidence."""
+        """The sleep-onset confidence vote and its evidence.
+
+        ``human_seen`` gates cold starts: before any human-judged activity has
+        ever been observed (a daemon restart during actual sleep), the vote
+        must never pass — otherwise the restart minute would be recorded as a
+        fabricated sleep onset.
+        """
         checks = {
             "quiet": presence.quiet_s >= self._spec.presence.quiet_min * 60.0,
             "tv_off": not signals.tv_on,
             "zone_off": not signals.zone_on,
             "bedroom_or_charging": (
                 presence.last_active_room == self._spec.bedroom or signals.phone_charging),
+            "human_seen": presence.last_active_room is not None,
         }
         return all(checks.values()), {"sleep_vote": checks, "quiet_s": round(presence.quiet_s)}
 
@@ -285,14 +301,16 @@ class RhythmEngine:
         m_shift = _noon_shifted(minute)
 
         if self._phase is None:  # first tick: seed from wall clock
+            if minute < wake_anchor:
+                return self.NIGHT, "seed"          # pre-dawn: assume night
+            if minute < 720:
+                return self.DAYLIGHT, "seed"       # morning half, past wake
             if m_shift >= night_start:
                 return self.NIGHT, "seed"
             if m_shift >= wind_down_start:
                 return self.WIND_DOWN, "seed"
             if m_shift >= _noon_shifted(signals.sunset_min):
                 return self.EVENING, "seed"
-            if minute < wake_anchor:
-                return self.NIGHT, "seed"          # pre-dawn restart: assume night
             return self.DAYLIGHT, "seed"
 
         if self._phase == self.SLEEP:
@@ -345,6 +363,16 @@ class RhythmEngine:
             if asleep:
                 self._record_sleep_onset(local, minute)
                 return self.SLEEP, "sleep-vote"
+            if self._phase == self.NIGHT and minute < 720:
+                # Morning escape: a restart during actual sleep seeds NIGHT
+                # and (human-seen gate) can never reach SLEEP, so NIGHT must
+                # hand off to MORNING itself when the human gets up.
+                woke, wake_ev = self._wake_evidence(presence)
+                evidence.update(wake_ev)
+                if woke:
+                    self._record_wake(local, minute)
+                    self._morning_started_min = minute
+                    return self.MORNING, "wake-detected"
             if self._phase == self.WIND_DOWN and m_shift >= night_start:
                 return self.NIGHT, "bed-anchor"
             return self._phase, "hold"

@@ -669,7 +669,8 @@ class CircadianDaemon:
         if rhythm is None or not rhythm.signals.next_alarm_file:
             return None
         try:
-            raw = open(rhythm.signals.next_alarm_file).read().strip()
+            with open(rhythm.signals.next_alarm_file) as fh:
+                raw = fh.read().strip()
             value = float(raw)
             return value if value > 0 else None
         except (OSError, ValueError):

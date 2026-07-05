@@ -30,6 +30,11 @@ BEDROOM_BURST = PresenceSummary(quiet_s=5, last_active_room="Bedroom",
                                 recent_rooms=("Bedroom",),
                                 recent_motion_count=3,
                                 recent_light_change=False)
+#: What PresenceTracker.summary() yields right after a daemon restart:
+#: no human activity ever judged.
+COLD = PresenceSummary(quiet_s=1e9, last_active_room=None,
+                       recent_rooms=(), recent_motion_count=0,
+                       recent_light_change=False)
 
 
 def _sig(alarm=None, charging=False, tv=False, zone_on=True, sunset=20 * 60 + 30):
@@ -138,6 +143,90 @@ def test_weekend_learned_wake_is_capped_by_drift_rule():
     d = eng.tick(_epoch(4, 12, 0), ACTIVE, _sig())
     # cap = weekday 420 + 90 drift = 510 (08:30), so 600 clamps to 510
     assert d.evidence["wake_anchor_min"] == 510
+    assert d.evidence["wake_anchor_src"] == "learned-weekend"
+
+
+def test_morning_restart_seeds_daylight_not_night():
+    """A daemon restart mid-morning must not strand the day in NIGHT."""
+    eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)
+    d = eng.tick(_epoch(1, 9, 30), ACTIVE, _sig())
+    assert d.phase == RhythmEngine.DAYLIGHT and d.reason == "seed"
+
+
+def test_seed_hour_sweep_is_sane():
+    """Seeding at every hour of a Wednesday lands in a sane phase.
+
+    Defaults: wake anchor 07:00, sunset fixture 20:30, wind-down 21:30
+    (bed 23:00 - 90m lead), night 23:00.
+    """
+    expected = {}
+    for h in range(24):
+        if h < 7:
+            expected[h] = RhythmEngine.NIGHT
+        elif h < 21:
+            expected[h] = RhythmEngine.DAYLIGHT
+        elif h == 21:
+            expected[h] = RhythmEngine.EVENING
+        elif h == 22:
+            expected[h] = RhythmEngine.WIND_DOWN
+        else:
+            expected[h] = RhythmEngine.NIGHT
+    for h in range(24):
+        eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)
+        d = eng.tick(_epoch(1, h, 0), QUIET, _sig(zone_on=False))
+        assert d.phase == expected[h], f"hour {h}: {d.phase} != {expected[h]}"
+
+
+def test_cold_start_with_charging_records_no_onset():
+    """A restart during actual sleep must not fabricate a sleep onset.
+
+    Cold presence (no human event ever judged) + phone on charger + zone off
+    would pass the old vote; the human-seen gate blocks it.
+    """
+    store = AnchorStore()
+    eng = RhythmEngine(_spec(), store, tz=TZ)
+    d = eng.tick(_epoch(1, 6, 0), COLD, _sig(charging=True, zone_on=False))
+    assert d.phase == RhythmEngine.NIGHT          # seeded pre-wake-anchor
+    d = eng.tick(_epoch(1, 6, 1), COLD, _sig(charging=True, zone_on=False))
+    assert d.phase == RhythmEngine.NIGHT
+    assert store.median("sleep_onset", "weekday") is None
+    assert store.median("sleep_onset", "weekend") is None
+
+
+def test_overnight_restart_wakes_from_night():
+    """Seeded NIGHT (restart during sleep) hands off to MORNING on wake."""
+    store = AnchorStore()
+    eng = RhythmEngine(_spec(), store, tz=TZ)
+    d = eng.tick(_epoch(1, 2, 0), QUIET, _sig(zone_on=False))
+    assert d.phase == RhythmEngine.NIGHT
+    d = eng.tick(_epoch(1, 6, 50), BEDROOM_BURST, _sig(zone_on=False))
+    assert d.phase == RhythmEngine.MORNING and d.reason == "wake-detected"
+    assert store.median("wake", "weekday") == 6 * 60 + 50
+
+
+def test_anchor_day_class_boundaries():
+    """The wake anchor is classed by the upcoming morning, not the onset rule.
+
+    Friday 06:00 -> today's (weekday) wake; Sunday 06:00 -> weekend; Friday
+    22:00 -> Saturday morning, so weekend. 2026-07-03 is a Friday.
+    """
+    def _store():
+        s = AnchorStore()
+        s.record("wake", "weekday", 420, "2026-06-29")   # 07:00
+        s.record("wake", "weekend", 500, "2026-06-28")   # 08:20
+        return s
+
+    d = RhythmEngine(_spec(), _store(), tz=TZ).tick(_epoch(3, 6, 0), ACTIVE, _sig())
+    assert d.evidence["wake_anchor_min"] == 420
+    assert d.evidence["wake_anchor_src"] == "learned-weekday"
+
+    d = RhythmEngine(_spec(), _store(), tz=TZ).tick(_epoch(5, 6, 0), ACTIVE, _sig())
+    # cap = weekday 420 + 90 drift = 510; 500 is under the cap -> unclamped
+    assert d.evidence["wake_anchor_min"] == 500
+    assert d.evidence["wake_anchor_src"] == "learned-weekend"
+
+    d = RhythmEngine(_spec(), _store(), tz=TZ).tick(_epoch(3, 22, 0), ACTIVE, _sig())
+    assert d.evidence["wake_anchor_min"] == 500
     assert d.evidence["wake_anchor_src"] == "learned-weekend"
 
 

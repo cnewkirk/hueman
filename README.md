@@ -221,18 +221,22 @@ code, but the daemon deliberately refuses to start with either; only
 `stage: "observe"` is implemented.
 
 **Phase model.** Phases move forward only, one step per tick:
-`dawn → morning → daylight → evening → wind_down → night → sleep`, with two
+`dawn → morning → daylight → evening → wind_down → night → sleep`, with three
 event-driven exceptions:
 - The **sleep vote** can cut `wind_down`/`night` straight to `sleep` once the
   house has been quiet for `presence.quiet`, the TV and the driven zone are
   both off, and either the bedroom was the last active room or the phone is
-  charging.
+  charging. The vote never passes before *any* human activity has been
+  observed, so a daemon restart during actual sleep can't fabricate an onset.
 - **Confirmed wake evidence** ends `dawn`/`sleep` and starts `morning`: enough
   motion (`presence.wake_confirm_events` events, or 2+ distinct rooms) within
   `presence.wake_confirm_window`, plus the bedroom being involved or a light
   change — so a hallway cat patrol can't read as "awake." A missed wake
   (alarm passed, no motion) force-advances to `morning` after two hours as a
   failsafe.
+- After midnight, the same wake evidence also ends `night` and starts
+  `morning` — the escape hatch for a restart during sleep, which seeds
+  `night` and (per the human-seen gate above) can never reach `sleep`.
 
 `wind_down` starts `wind_down_lead` before `bed_target`; `dawn` starts
 `dawn_lead` before the wake anchor, which resolves in order: a phone alarm due
