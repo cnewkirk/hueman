@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import sys
 from collections.abc import Callable
 
@@ -85,6 +86,8 @@ class Cli:
         circ_sub = circadian_parser.add_subparsers(dest="circadian_cmd", required=True)
         circ_sub.add_parser("run", help="run the daemon (foreground; container entrypoint)")
         circ_sub.add_parser("resume", help="hand control back to a running daemon")
+
+        sub.add_parser("rhythm", help="print the rhythm engine's phase, anchors, and evidence")
 
         security_parser = sub.add_parser("security", help="arm/disarm security mode")
         sec_sub = security_parser.add_subparsers(dest="security_cmd", required=True)
@@ -249,6 +252,51 @@ class Cli:
         print(f"  on_file:  {sec.file_on or '(unset)'}")
         print(f"  off_file: {sec.file_off or '(unset)'}")
         print(f"  pending on-file present: {pending}")
+        return 0
+
+    def _cmd_rhythm(self, args: argparse.Namespace) -> int:
+        """Print the rhythm engine's current state, anchors, and evidence."""
+        config = load_config(args.config)
+        rhythm = config.rhythm
+        if rhythm is None:
+            print("config has no 'rhythm' block", file=sys.stderr)
+            return 1
+        try:
+            with open(rhythm.state_file) as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            print(
+                f"rhythm state not found at {rhythm.state_file} — the daemon "
+                "has not written it yet (is it running with rhythm: enabled?)",
+                file=sys.stderr,
+            )
+            return 1
+        snap = doc.get("snapshot", {})
+
+        def hhmm(minute: int | None) -> str:
+            """Render minutes-after-midnight as ``HH:MM``, or ``--:--`` if unset."""
+            return "--:--" if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
+
+        learned = snap.get("learned", {})
+        onset = learned.get("sleep_onset_weekday")
+        error_min = None if onset is None else onset - rhythm.bed_target_min
+        print(f"phase:        {snap.get('phase', '?')}  (as of {snap.get('as_of', '?')})")
+        print(f"bed anchor:   {hhmm(snap.get('bed_anchor_min'))}  (target)")
+        print(f"wake anchor:  {hhmm(snap.get('wake_anchor_min'))}")
+        print("learned:")
+        print(
+            f"  wake        weekday {hhmm(learned.get('wake_weekday'))}  "
+            f"weekend {hhmm(learned.get('wake_weekend'))}"
+        )
+        print(
+            f"  sleep onset weekday {hhmm(learned.get('sleep_onset_weekday'))}  "
+            f"weekend {hhmm(learned.get('sleep_onset_weekend'))}"
+        )
+        if error_min is None:
+            print("phase error:  n/a (no observed sleep onsets yet)")
+        else:
+            print(f"phase error:  {error_min:+d} min (observed weekday onset vs target)")
+        print(f"last change:  {json.dumps(snap.get('last_change_evidence', {}))}")
         return 0
 
     # -- helpers ------------------------------------------------------------ #
