@@ -62,3 +62,22 @@ def test_rhythm_status_without_rhythm_block(tmp_path, capsys):
     )
     assert main(["-c", str(cfg), "rhythm"]) == 1
     assert "no 'rhythm' block" in capsys.readouterr().err.lower()
+
+
+def test_rhythm_status_with_non_dict_snapshot(tmp_path, capsys):
+    state = tmp_path / "rhythm-state.json"
+    state.write_text('{"version": 1, "snapshot": "corrupt"}')
+    cfg = _write_config(tmp_path, state)
+    assert main(["-c", str(cfg), "rhythm"]) == 1
+    assert "malformed" in capsys.readouterr().err.lower()
+
+
+def test_rhythm_status_with_wrong_typed_minutes_degrades(tmp_path, capsys):
+    state = tmp_path / "rhythm-state.json"
+    state.write_text(
+        '{"version": 1, "snapshot": {"phase": "night", "bed_anchor_min": "1380",'
+        ' "learned": {"sleep_onset_weekday": "oops"}}}')
+    cfg = _write_config(tmp_path, state)
+    assert main(["-c", str(cfg), "rhythm"]) == 0
+    out = capsys.readouterr().out
+    assert "--:--" in out and "n/a" in out.lower()

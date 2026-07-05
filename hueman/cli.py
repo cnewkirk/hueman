@@ -271,15 +271,25 @@ class Cli:
                 file=sys.stderr,
             )
             return 1
-        snap = doc.get("snapshot", {})
+        snap = doc.get("snapshot") if isinstance(doc, dict) else None
+        if not isinstance(snap, dict):
+            print(
+                f"rhythm state at {rhythm.state_file} is malformed — delete it "
+                "and let the daemon rewrite it",
+                file=sys.stderr,
+            )
+            return 1
 
-        def hhmm(minute: int | None) -> str:
-            """Render minutes-after-midnight as ``HH:MM``, or ``--:--`` if unset."""
-            return "--:--" if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
+        def hhmm(minute: object) -> str:
+            """Render minutes-after-midnight as ``HH:MM``, or ``--:--`` if unset/invalid."""
+            if not isinstance(minute, int):
+                return "--:--"
+            return f"{minute // 60:02d}:{minute % 60:02d}"
 
-        learned = snap.get("learned", {})
+        raw_learned = snap.get("learned")
+        learned = raw_learned if isinstance(raw_learned, dict) else {}
         onset = learned.get("sleep_onset_weekday")
-        error_min = None if onset is None else onset - rhythm.bed_target_min
+        error_min = onset - rhythm.bed_target_min if isinstance(onset, int) else None
         print(f"phase:        {snap.get('phase', '?')}  (as of {snap.get('as_of', '?')})")
         print(f"bed anchor:   {hhmm(snap.get('bed_anchor_min'))}  (target)")
         print(f"wake anchor:  {hhmm(snap.get('wake_anchor_min'))}")
