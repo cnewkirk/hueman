@@ -855,16 +855,12 @@ class CircadianDaemonSpec:
         mo = _as_dict(d.get("manual_override"), f"{ctx}.manual_override")
         retry = _as_dict(d.get("retry"), f"{ctx}.retry")
         log = _as_dict(d.get("log"), f"{ctx}.log")
-        hand_off = parse_time_ref(d.get("hand_off", "22:34"), ctx=f"{ctx}.hand_off")
-        if hand_off in ("sunrise", "sunset"):
-            raise ConfigError(f"{ctx}.hand_off must be a clock time like '22:34'")
-        hh, mm = hand_off.split(":")
         floor = d.get("brightness_floor")
         ceil = d.get("brightness_ceiling")
         return cls(
             zone=str(_require(d, "zone", ctx)),
             start=parse_anchor(d.get("start", "sunrise"), ctx=f"{ctx}.start"),
-            hand_off_min=int(hh) * 60 + int(mm),
+            hand_off_min=_clock_minute(d.get("hand_off", "22:34"), f"{ctx}.hand_off"),
             interval_ms=parse_duration(d.get("interval", "60s"), ctx=f"{ctx}.interval"),
             transition_ms=parse_duration(d.get("transition", "75s"), ctx=f"{ctx}.transition"),
             fade_off_ms=parse_duration(d.get("fade_off", "90s"), ctx=f"{ctx}.fade_off"),
@@ -1028,6 +1024,163 @@ class SecuritySpec:
         )
 
 
+def _clock_minute(value: Any, ctx: str) -> int:
+    """Parse a strict ``HH:MM`` clock time to minutes after midnight.
+
+    Unlike :func:`parse_time_ref` consumers that accept sun anchors, callers
+    of this helper need a fixed wall-clock minute; ``sunrise``/``sunset`` are
+    rejected with a :class:`ConfigError` naming ``ctx``.
+    """
+    ref = parse_time_ref(value, ctx=ctx)
+    if ref in ("sunrise", "sunset"):
+        raise ConfigError(f"{ctx} must be a clock time like '22:45'")
+    hh, mm = ref.split(":")
+    return int(hh) * 60 + int(mm)
+
+
+def _dur_min(value: Any, ctx: str) -> int:
+    """Parse a duration (``"90m"``, ``"2h"``) to whole minutes."""
+    return parse_duration(value, ctx=ctx) // 60_000
+
+
+@dataclass(frozen=True)
+class RhythmSignals:
+    """External phone-derived signal files for the rhythm engine.
+
+    Both are optional; the engine degrades to learned/default anchors when a
+    file is unset or absent. Files live on a shared mount written by an
+    external automation (e.g. Home Assistant), mirroring the TV bias
+    control-file channel.
+
+    Attributes:
+        next_alarm_file: Path to a file whose content is the epoch-seconds
+            timestamp of the phone's next alarm (empty/``0`` = no alarm set).
+            Re-read every tick; never consumed.
+        charging_file: Path whose *existence* means the phone is charging.
+            Never consumed.
+    """
+
+    next_alarm_file: str | None = None
+    charging_file: str | None = None
+
+    @classmethod
+    def parse(cls, value: Any, ctx: str) -> "RhythmSignals":
+        """Parse the ``rhythm.signals`` block (both paths optional)."""
+        d = _as_dict(value, ctx)
+        alarm = d.get("next_alarm_file")
+        charging = d.get("charging_file")
+        return cls(
+            next_alarm_file=str(alarm) if alarm else None,
+            charging_file=str(charging) if charging else None,
+        )
+
+
+@dataclass(frozen=True)
+class RhythmPresence:
+    """Presence-inference tunables (pet discounting and wake confirmation).
+
+    Attributes:
+        quiet_min: House-wide human quiet (minutes) required before the
+            sleep-onset vote can pass.
+        wake_confirm_events: Motion events within the confirm window needed
+            to call a wake "sustained" (a single pet blip cannot fake it).
+        wake_confirm_window_min: The sliding window (minutes) for the two
+            attributes above and for ``recent_rooms``.
+        pet_progression_min: Motion in one room counts as human when a
+            *different* room was active within this many minutes
+            (room-to-room progression); solo single-room motion is
+            discounted as a pet.
+    """
+
+    quiet_min: int = 30
+    wake_confirm_events: int = 3
+    wake_confirm_window_min: int = 10
+    pet_progression_min: int = 5
+
+    @classmethod
+    def parse(cls, value: Any, ctx: str) -> "RhythmPresence":
+        """Parse the ``rhythm.presence`` block (all fields defaulted)."""
+        d = _as_dict(value, ctx)
+        return cls(
+            quiet_min=_dur_min(d.get("quiet", "30m"), f"{ctx}.quiet"),
+            wake_confirm_events=int(d.get("wake_confirm_events", 3)),
+            wake_confirm_window_min=_dur_min(
+                d.get("wake_confirm_window", "10m"), f"{ctx}.wake_confirm_window"),
+            pet_progression_min=_dur_min(
+                d.get("pet_progression", "5m"), f"{ctx}.pet_progression"),
+        )
+
+
+@dataclass(frozen=True)
+class RhythmSpec:
+    """The rhythm engine: closed-loop day-phase inference (and, in later
+    stages, shepherding actuation).
+
+    Stage 1 ships ``stage: "observe"`` only — the engine infers and logs but
+    never writes to the bridge. See the design spec (ops repo,
+    ``docs/superpowers/specs/2026-07-04-rhythm-engine-design.md``).
+
+    Attributes:
+        stage: Rollout stage; only ``"observe"`` is implemented (parse accepts
+            the future ``"mornings"``/``"full"`` so a config can be staged, but
+            the daemon refuses to start them until those stages ship).
+        bedroom: Room name whose motion area anchors sleep/wake inference.
+        bed_target_min: Chosen bed-time target, minutes after midnight.
+        wake_default_min: Fallback wake anchor when no alarm and no history.
+        weekend_drift_cap_min: Max minutes weekend anchors may lag weekday's.
+        wind_down_lead_min: Wind-down phase starts this long before bed anchor.
+        dawn_lead_min: Dawn phase starts this long before the wake anchor.
+        dawn_max_advance_min: Cap on snooze-through compensation (unused in
+            observe; parsed now so staged configs validate).
+        morning_min: Duration of the ``morning`` phase after wake.
+        state_file: JSON file for learned anchors + the live snapshot.
+        signals: External phone signal files.
+        presence: Presence-inference tunables.
+    """
+
+    bedroom: str
+    stage: str = "observe"
+    bed_target_min: int = 23 * 60
+    wake_default_min: int = 7 * 60
+    weekend_drift_cap_min: int = 90
+    wind_down_lead_min: int = 90
+    dawn_lead_min: int = 25
+    dawn_max_advance_min: int = 20
+    morning_min: int = 60
+    state_file: str = "rhythm-state.json"
+    signals: RhythmSignals = RhythmSignals()
+    presence: RhythmPresence = RhythmPresence()
+
+    @classmethod
+    def parse(cls, value: Any, ctx: str = "rhythm") -> "RhythmSpec":
+        """Parse the ``rhythm:`` block. Only ``bedroom`` is required."""
+        d = _as_dict(value, ctx)
+        stage = str(d.get("stage", "observe"))
+        if stage not in ("observe", "mornings", "full"):
+            raise ConfigError(
+                f"{ctx}.stage must be 'observe', 'mornings' or 'full', got {stage!r}")
+        bedroom = d.get("bedroom")
+        if not bedroom or not isinstance(bedroom, str):
+            raise ConfigError(f"{ctx}.bedroom is required (the room name whose "
+                              "motion area anchors sleep/wake inference)")
+        return cls(
+            bedroom=bedroom,
+            stage=stage,
+            bed_target_min=_clock_minute(d.get("bed_target", "23:00"), f"{ctx}.bed_target"),
+            wake_default_min=_clock_minute(d.get("wake_default", "07:00"), f"{ctx}.wake_default"),
+            weekend_drift_cap_min=_dur_min(d.get("weekend_drift_cap", "90m"),
+                                           f"{ctx}.weekend_drift_cap"),
+            wind_down_lead_min=_dur_min(d.get("wind_down_lead", "90m"), f"{ctx}.wind_down_lead"),
+            dawn_lead_min=_dur_min(d.get("dawn_lead", "25m"), f"{ctx}.dawn_lead"),
+            dawn_max_advance_min=_dur_min(d.get("dawn_max_advance", "20m"),
+                                          f"{ctx}.dawn_max_advance"),
+            morning_min=_dur_min(d.get("morning", "60m"), f"{ctx}.morning"),
+            state_file=str(d.get("state_file", "rhythm-state.json")),
+            signals=RhythmSignals.parse(d.get("signals", {}), f"{ctx}.signals"),
+            presence=RhythmPresence.parse(d.get("presence", {}), f"{ctx}.presence"),
+        )
+
+
 @dataclass(frozen=True)
 class Config:
     """The fully validated desired state — the root of the config tree.
@@ -1053,6 +1206,7 @@ class Config:
     circadian_scene: CircadianSceneSpec | None = None
     circadian_daemon: CircadianDaemonSpec | None = None
     security: SecuritySpec | None = None
+    rhythm: RhythmSpec | None = None
     require_all_lights_assigned: bool = True
     marker: str = DEFAULT_MARKER
 
@@ -1101,6 +1255,9 @@ class Config:
         security = (
             SecuritySpec.parse(doc["security"]) if doc.get("security") else None
         )
+        rhythm = (
+            RhythmSpec.parse(doc["rhythm"], "rhythm") if "rhythm" in doc else None
+        )
         return cls(
             bridge=bridge,
             location=location,
@@ -1113,6 +1270,7 @@ class Config:
             circadian_scene=circadian_scene,
             circadian_daemon=circadian_daemon,
             security=security,
+            rhythm=rhythm,
             require_all_lights_assigned=bool(doc.get("require_all_lights_assigned", True)),
             marker=str(doc.get("marker", DEFAULT_MARKER)),
         )

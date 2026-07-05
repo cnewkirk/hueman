@@ -81,6 +81,7 @@ hueman -c my-home.yaml apply            # converge the bridge to the declared st
 hueman -c my-home.yaml circadian run    # run the circadian + TV-bias daemon (foreground)
 hueman -c my-home.yaml circadian resume # clear a manual-override suspension out-of-band
 hueman -c my-home.yaml security on|off  # arm / disarm the panic show
+hueman -c my-home.yaml rhythm           # print the rhythm engine's phase, anchors, evidence
 hueman -c my-home.yaml watch            # legacy live motion controller (see Limitations)
 ```
 
@@ -203,6 +204,94 @@ Key sections:
   photosensitivity floor on luminance flashing, arm/disarm triggers, and a
   decoupled sound-cue contract for an external audio adapter.
 - `motion_policies` — per-sensor policies for the legacy `watch` runtime.
+- `rhythm` — closed-loop day-phase inference (observe stage); see below.
+
+## Rhythm engine (observe stage)
+
+`rhythm:` runs a closed-loop day-phase inference engine inside the circadian
+daemon: it watches MotionAware motion (in your bedroom and elsewhere) plus
+optional phone signals, infers which phase of your day you're in, logs every
+phase change with its evidence, and learns your real wake/bed-time anchors
+over time.
+
+**Stage 1 ("observe") never writes to the bridge.** It's a read-only shadow
+layer — nothing it infers changes what your lights do. The config accepts
+`stage: "mornings"` and `stage: "full"` so a config can be staged ahead of the
+code, but the daemon deliberately refuses to start with either; only
+`stage: "observe"` is implemented.
+
+**Phase model.** Phases move forward only, one step per tick:
+`dawn → morning → daylight → evening → wind_down → night → sleep`, with three
+event-driven exceptions:
+- The **sleep vote** can cut `wind_down`/`night` straight to `sleep` once the
+  house has been quiet for `presence.quiet`, the TV and the driven zone are
+  both off, and either the bedroom was the last active room or the phone is
+  charging. The vote never passes before *any* human activity has been
+  observed, so a daemon restart during actual sleep can't fabricate an onset.
+- **Confirmed wake evidence** ends `dawn`/`sleep` and starts `morning`: enough
+  motion (`presence.wake_confirm_events` events, or 2+ distinct rooms) within
+  `presence.wake_confirm_window`, plus the bedroom being involved or a light
+  change — so a hallway cat patrol can't read as "awake." Wake evidence only
+  counts when the clock is plausibly morning (from ~2h before the dawn window
+  opens): a 01:30 bathroom trip is logged as a night waking and ignored, so it
+  can't poison the learned wake anchor. A missed wake
+  (alarm passed, no motion) force-advances to `morning` after two hours as a
+  failsafe.
+- After midnight, the same wake evidence (same plausibly-morning gate) also
+  ends `night` and starts `morning` — the escape hatch for a restart during
+  sleep, which seeds `night` and (per the human-seen gate above) can never
+  reach `sleep`.
+
+`wind_down` starts `wind_down_lead` before `bed_target`; `dawn` starts
+`dawn_lead` before the wake anchor, which resolves in order: a phone alarm due
+within 18h, else your learned median wake time for weekday/weekend (weekend
+capped at `weekend_drift_cap` past weekday), else `wake_default`.
+
+**Signal files.** Two optional files, written by an external automation (e.g.
+Home Assistant) and re-read every tick — the engine never consumes or deletes
+them:
+- `signals.next_alarm_file` — epoch seconds of the phone's next alarm
+  (`0`/empty = none set).
+- `signals.charging_file` — its mere *existence* means the phone is on the
+  charger (a bedtime proxy).
+
+Either can be unset or unreadable; the engine just falls back to learned
+anchors or config defaults.
+
+**Pet discounting.** MotionAware areas report presence, not identity. In a
+one-human-plus-pets home: a light change always counts as human (pets don't
+use switches); motion counts as human when a *different* room was active
+within `presence.pet_progression` minutes (room-to-room movement) **or** when
+any light change happened within that same window (a human is clearly up and
+about); solo single-room motion is otherwise discounted as a pet. Known blind
+spot: a human
+sitting nearly still in one room for a long stretch degrades to "pet"
+judgments — but the sleep vote that consumes this signal also requires
+lights-out and TV-off, so a reader with a lamp on is never mistaken for an
+empty house.
+
+**Checking on it:**
+
+```
+hueman -c my-home.yaml rhythm
+```
+
+prints the current phase and when it was last read, today's bed/wake
+anchors, the learned weekday/weekend wake and sleep-onset medians, how far
+the learned weekday sleep-onset has drifted from `bed_target` (once at least
+one onset has been observed), and the JSON evidence behind the most recent
+phase change.
+
+**The state file** (`state_file`, default `rhythm-state.json`) holds the
+learned anchors plus the latest snapshot, written atomically after every
+phase change. Delete it to reset learning — the engine falls back to config
+defaults until it re-learns.
+
+**Debugging.** Evidence lines carry a `rhythm:` prefix — grep the daemon log
+for it. Every phase *change* is logged at INFO with its full evidence dict
+(and rewrites the state file); manual overrides fed in as human activity also
+log at INFO; individual per-event motion judgments appear at DEBUG; quiet
+"hold" ticks that change nothing are silent.
 
 ## What needs which hardware
 
@@ -210,14 +299,16 @@ Key sections:
   security mode work on any **CLIP v2** bridge (square Hue bridge or Bridge Pro).
 - `night_motion` and motion-area inventory need a **Hue Bridge Pro** running
   **MotionAware** (motion sensed by the bulb grid — no PIR sensors required).
+  `rhythm` also wants MotionAware for its motion evidence; without it, presence
+  inference sees only manual-override activity (still functional, just blinder).
 - The legacy `watch` runtime needs old-style PIR **Hue motion sensors**.
 
 ## Limitations and notes
 
 - The pure decision layer (config, sun, circadian, daemon controller, bias,
-  security, engine, reconcile, nightmotion) is covered by 300+ unit tests.
-  `client`, `pin`, and the daemon's I/O shell talk to a real bridge and should
-  be exercised on your network.
+  security, engine, reconcile, nightmotion, presence, rhythm) is covered by
+  300+ unit tests. `client`, `pin`, and the daemon's I/O shell talk to a real
+  bridge and should be exercised on your network.
 - **`watch` is legacy and known-inadequate against current bridge firmware**:
   its echo-buffer override detection predates the bridge's periodic re-emission
   of settled `grouped_light` values, which it can misread as manual overrides,
@@ -252,11 +343,13 @@ unit-tested; the network surface is thin and replaceable.
 | `engine.py` | Pure motion/timing state machine for `watch` (`PolicyEngine`) |
 | `payload.py` | Decision output → CLIP request bodies, incl. sRGB → CIE xy |
 | `nightmotion.py` | Pure night-motion/scene helpers: scene bodies, automation transform, tolerant scene-look diff |
+| `presence.py` | Pure activity judging for `rhythm`: pet-discounting rules, quiet/confirm-window summaries (`PresenceTracker`) |
+| `rhythm_control.py` | Pure day-phase state machine for `rhythm` (observe stage): phases, sleep/wake votes, learned anchors (`RhythmEngine`, `AnchorStore`) |
 | `reconcile.py` | Terraform-style plan/apply: `Planner` + area, sensitivity, smart-scene, circadian-scene, and night-motion reconcilers |
 | `state.py` | Index the live bridge (incl. MotionAware areas); resolve names → ids |
 | `client.py` | CLIP API v2 client |
 | `pin.py` | Trust-on-first-use TLS certificate pinning |
-| `circadian_daemon.py` | The resident daemon: curve ticks, SSE events, TV-bias triggers, security show |
+| `circadian_daemon.py` | The resident daemon: curve ticks, SSE events, TV-bias triggers, security show, rhythm-engine ticks |
 | `watch.py` | Legacy live runtime: bridge event stream → `PolicyEngine` → commands |
 | `cli.py` | The `hueman` command-line interface |
 
