@@ -21,7 +21,8 @@ nothing else works.** No code path reads a key file at runtime. Keep the key
 in a mode-600 file and have the *host* deliver it as an env var: an
 `env_file:`/`EnvironmentFile=` line (preferred — keeps it out of
 `docker inspect` and shell history), or `-e HUE_APPLICATION_KEY="$(cat
-/srv/hueman/.hue-key)"` inline. Missing key = every API call returns 401 =
+/srv/hueman/.hue-key)"` inline. A missing key fails immediately with `no
+application key`; a wrong key gets 401s from the bridge — either way, a
 crash loop.
 
 **A pre-pinned `.hue-pin.json`.** The default TLS mode records the bridge
@@ -34,7 +35,8 @@ interactive shell to create the pin, then copy it to the data dir.
 directory — `/data` inside the container, `WorkingDirectory=` under systemd.
 It needs: `hue.yaml` (read-only is fine), `.hue-pin.json` (read-only), and a
 writable `logs/` (the log file defaults to `logs/circadian.log`; the
-manual-resume control file `.hue-circadian-resume` also lands here).
+manual-resume control file `.hue-circadian-resume` defaults to the data
+directory itself, not under `logs/`).
 
 **A route to the bridge.** The daemon holds a long-lived SSE (server-sent
 events) stream to the bridge on your LAN. In containers use
@@ -138,7 +140,7 @@ is a worked example of that approach.
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Container/service exits immediately | No `circadian_daemon:` block, bad config, or a missing mount | Read the logs — the parse error names the problem |
-| Crash loop, logs show 401 | `HUE_APPLICATION_KEY` not delivered | Check the env file path and contents |
-| `TLS pin mismatch` on connect | Bridge replaced or cert rotated | Delete and re-create `.hue-pin.json` from an interactive shell, redeploy |
+| Crash loop: `no application key` or 401s | `HUE_APPLICATION_KEY` missing or wrong | Check the env file path and contents |
+| `certificate fingerprint ... changed!` on connect | Bridge replaced or cert rotated | Delete and re-create `.hue-pin.json` from an interactive shell, redeploy |
 | SSE stream drops / reconnects | Bridge reboot or LAN blip | Self-heals; if constant, check `network_mode: host` |
 | `BLOCKED` on apply | Zone/scene name not on the bridge | Run `hueman plan` from your dev machine |
