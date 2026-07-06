@@ -261,3 +261,74 @@ def test_snapshot_is_json_serialisable_and_carries_anchors():
     json.dumps(snap)
     assert snap["phase"] == RhythmEngine.DAYLIGHT
     assert "bed_anchor_min" in snap and "wake_anchor_min" in snap
+
+
+def test_daylight_holds_through_morning_after_wake_no_cascade():
+    """DAYLIGHT reached before noon must HOLD, not cascade toward NIGHT.
+
+    Regression for the morning phase cascade: once MORNING elapsed to DAYLIGHT
+    at ~08:00 (minute < 720), the noon-shifted clock sat above every evening
+    threshold, so the DAYLIGHT branch fell DAYLIGHT->WIND_DOWN->NIGHT on the
+    very next tick and then flapped back via the NIGHT morning-escape,
+    re-recording a bogus late wake anchor each loop.
+    """
+    eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)
+    eng.tick(_epoch(1, 23, 1), ACTIVE, _sig())                      # NIGHT (seed)
+    eng.tick(_epoch(1, 23, 50), QUIET, _sig(zone_on=False))         # -> SLEEP
+    eng.tick(_epoch(2, 6, 50), BEDROOM_BURST, _sig(zone_on=False))  # -> MORNING
+    d = eng.tick(_epoch(2, 7, 55), ACTIVE, _sig())                  # -> DAYLIGHT
+    assert d.phase == RhythmEngine.DAYLIGHT and d.reason == "morning-elapsed"
+    d = eng.tick(_epoch(2, 9, 0), ACTIVE, _sig())                   # morning half: HOLD
+    assert d.phase == RhythmEngine.DAYLIGHT
+    assert d.changed is False and d.reason == "hold"
+    d = eng.tick(_epoch(2, 11, 30), ACTIVE, _sig())                 # still morning: HOLD
+    assert d.phase == RhythmEngine.DAYLIGHT
+
+
+def test_seeded_daylight_does_not_cascade_before_noon():
+    """A mid-morning restart seeds DAYLIGHT and must stay there, not strand.
+
+    test_morning_restart_seeds_daylight_not_night only checks the seed tick;
+    the cascade struck on the *next* tick.
+    """
+    eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)
+    d = eng.tick(_epoch(1, 9, 30), ACTIVE, _sig())
+    assert d.phase == RhythmEngine.DAYLIGHT and d.reason == "seed"
+    d = eng.tick(_epoch(1, 10, 0), ACTIVE, _sig())
+    assert d.phase == RhythmEngine.DAYLIGHT
+    assert d.changed is False and d.reason == "hold"
+
+
+def test_continuous_day_holds_daylight_then_progresses_to_night():
+    """A full simulated day: DAYLIGHT holds morning + afternoon, then the
+    normal evening progression still fires (the fix must not over-gate)."""
+    eng = RhythmEngine(_spec(), AnchorStore(), tz=TZ)
+    eng.tick(_epoch(1, 23, 1), ACTIVE, _sig())                      # NIGHT (seed)
+    eng.tick(_epoch(1, 23, 50), QUIET, _sig(zone_on=False))         # -> SLEEP
+    eng.tick(_epoch(2, 6, 50), BEDROOM_BURST, _sig(zone_on=False))  # -> MORNING
+    assert eng.tick(_epoch(2, 7, 55), ACTIVE, _sig()).phase == RhythmEngine.DAYLIGHT
+    for hh, mm in [(8, 0), (10, 0), (12, 30), (17, 0), (20, 0)]:
+        d = eng.tick(_epoch(2, hh, mm), ACTIVE, _sig())
+        assert d.phase == RhythmEngine.DAYLIGHT, f"{hh:02d}:{mm:02d} -> {d.phase}"
+    assert eng.tick(_epoch(2, 20, 31), ACTIVE, _sig()).phase == RhythmEngine.EVENING
+    assert eng.tick(_epoch(2, 21, 31), ACTIVE, _sig()).phase == RhythmEngine.WIND_DOWN
+    assert eng.tick(_epoch(2, 23, 1), ACTIVE, _sig()).phase == RhythmEngine.NIGHT
+
+
+def test_late_bed_after_midnight_reaches_night():
+    """A post-midnight bedtime must still wind down and reach NIGHT.
+
+    Guards against an over-broad morning fix: EVENING is legitimately active
+    just past midnight for a post-midnight bed_target, and its wind-down fires
+    in the morning half (minute < 720). Gating EVENING on ``minute >= 720``
+    would strand it here forever, so the fix must guard DAYLIGHT only.
+    """
+    eng = RhythmEngine(_spec(bed_target="02:00"), AnchorStore(), tz=TZ)
+    d = eng.tick(_epoch(1, 21, 0), ACTIVE, _sig())      # -> EVENING (seed)
+    assert d.phase == RhythmEngine.EVENING
+    d = eng.tick(_epoch(1, 23, 59), ACTIVE, _sig())     # before its wind-down
+    assert d.phase == RhythmEngine.EVENING
+    d = eng.tick(_epoch(2, 0, 30), ACTIVE, _sig())      # 00:30 = bed 02:00 - 90m lead
+    assert d.phase == RhythmEngine.WIND_DOWN and d.reason == "wind-down-lead"
+    d = eng.tick(_epoch(2, 2, 0), ACTIVE, _sig())       # bed anchor
+    assert d.phase == RhythmEngine.NIGHT and d.reason == "bed-anchor"

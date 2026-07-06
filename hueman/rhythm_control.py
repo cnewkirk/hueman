@@ -369,10 +369,19 @@ class RhythmEngine:
             return self.MORNING, "hold"
 
         if self._phase == self.DAYLIGHT:
-            if m_shift >= wind_down_start:
-                return self.WIND_DOWN, "wind-down-lead"
-            if m_shift >= _noon_shifted(signals.sunset_min):
-                return self.EVENING, "sunset"
+            # Only advance toward evening in the afternoon half (minute >= 720),
+            # the same noon boundary the seed branch uses. In the morning half
+            # _noon_shifted maps the clock (e.g. 08:00 -> 1200) above every
+            # evening threshold, so an unguarded comparison would cascade
+            # DAYLIGHT straight to WIND_DOWN/NIGHT the moment MORNING elapses.
+            # EVENING needs no such guard: it is never entered before noon, and
+            # for a post-midnight bed target it must wind down in the morning
+            # half, so gating it here would strand it.
+            if minute >= 720:
+                if m_shift >= wind_down_start:
+                    return self.WIND_DOWN, "wind-down-lead"
+                if m_shift >= _noon_shifted(signals.sunset_min):
+                    return self.EVENING, "sunset"
             return self.DAYLIGHT, "hold"
 
         if self._phase == self.EVENING:
