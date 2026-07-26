@@ -602,6 +602,36 @@ def test_failed_edge_writes_retry_on_next_apply(monkeypatch):
     assert lw["Lplay"]["dynamics"] == {"duration": 2_000}
 
 
+def test_unreachable_light_does_not_stall_edge_latch(monkeypatch):
+    """An unreachable bias bulb (a housekeeper unplugged it) must NOT keep the
+    edge from latching. Otherwise ``_bias_last_applied_on`` never catches up to
+    ``tv_on``, every poll reads as a fresh TV flip, and the daemon re-fires the
+    whole viewing set every ~2s forever (the runaway observed live 2026-07-25)."""
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._tick_once(t)                                 # settle startup state (TV off)
+    d._client.writes.clear()
+    dead = BridgeError(
+        "PUT /clip/v2/resource/light/Lcouch: device (light) Lcouch has "
+        "communication issues, command (.on.on) may not have effect",
+        unreachable=True,
+    )
+    original = d._client.update_resource
+    def one_dead(rtype, rid, body):
+        if rtype == "light" and rid == "Lcouch":    # the unplugged bulb
+            raise dead
+        return original(rtype, rid, body)
+    d._client.update_resource = one_dead
+    d._bias_aggregator.on(t + 1)                    # TV-on edge; Lcouch unreachable
+    d._apply_bias_if_changed(t + 1)
+    assert d._bias_last_applied_on is True          # latched despite the dead bulb
+    assert "Lplay" in _light_writes(d)              # the reachable light still held
+    # No new flip -> the next apply is a NO-OP, not another edge re-fire.
+    d._client.writes.clear()
+    d._apply_bias_if_changed(t + 2)
+    assert _light_writes(d) == {}
+
+
 def test_bias_edge_logs_flip_at_info(caplog):
     """A committed TV flip emits one INFO line naming the state and source."""
     cfg = _cfg_bias({"probe": {"enabled": True, "host": "192.0.2.50", "debounce": "0s"}})
