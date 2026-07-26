@@ -1200,6 +1200,14 @@ class CircadianDaemon:
                 _LOG.debug(
                     "settled at %.1f%% within post-restore grace -> not classified", bri)
                 return
+            # TODO(housekeeper-resilience): `bri` is the *grouped* brightness, an
+            # aggregate over the zone's members. An unreachable Circadian Core
+            # member (a bulb a housekeeper unplugged) can hold that aggregate
+            # off-target and trip a false "manual override -> suspend" — the core
+            # twin of the bias-latch cascade fixed in #8. Audit: fold
+            # zigbee_connectivity into this comparison so a connectivity_issue
+            # member can't suspend the day drive. (Not yet observed live; the
+            # 2026-07-25 core suspend was a genuine manual zone-off.)
             if (
                 self._controller.mode != CircadianController.SUSPENDED
                 and self._cmd_on
