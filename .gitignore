@@ -27,3 +27,6 @@ logs/
 
 # live config lives in the private ops repo (symlink locally)
 hue.yaml
+
+# uv lockfile — not tracked (see PR #8 cleanup)
+uv.lock
