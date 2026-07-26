@@ -43,6 +43,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from enum import Enum
 from typing import cast
 from zoneinfo import ZoneInfo
 
@@ -70,6 +71,23 @@ from .sun import SolarCalculator
 from .watch import BridgeEvent, HueEventStream
 
 _LOG = logging.getLogger("hueman.circadian_daemon")
+
+
+class _BiasWrite(Enum):
+    """Outcome of a single bias light write, for the edge-latch decision.
+
+    ``OK`` — the bridge accepted it. ``FAILED`` — a *transient* bridge rejection
+    (e.g. "command queue is full"); the edge must not latch so the next tick
+    retries it. ``UNREACHABLE`` — the device reported Zigbee communication
+    problems (an unplugged bulb); it will not answer no matter how often we
+    retry, so it must NOT block the edge from latching — otherwise one dead
+    viewing light makes every tick look like a fresh TV flip and the daemon
+    re-fires the whole bias set every poll (observed live 2026-07-25).
+    """
+
+    OK = "ok"
+    FAILED = "failed"
+    UNREACHABLE = "unreachable"
 
 
 class CircadianDaemon:
@@ -524,12 +542,16 @@ class CircadianDaemon:
         enabled trigger sources.
 
         A committed TV flip is an *edge*: every light gets the short
-        ``bias.transition`` fade, and the flip is logged. The edge is only
-        latched (``_bias_last_applied_on``) when all writes succeed, so a bridge
-        rejection is retried on the next apply (probe tick or curve tick)
-        instead of being lost until the next state change. Non-edge ``BiasOff``
-        writes are suppressed once the off has landed — re-PUTing off to the
-        whole viewing set every tick, all night, is pure queue pressure.
+        ``bias.transition`` fade, and the flip is logged. The edge is latched
+        (``_bias_last_applied_on``) once every write has either landed or hit an
+        *unreachable* device: a *transient* bridge rejection (``FAILED``) leaves
+        it unlatched so the next apply (probe tick or curve tick) retries,
+        whereas an unplugged bulb (``UNREACHABLE``) must not block the latch —
+        it will fail every tick forever, and refusing to latch turns each poll
+        into a fresh "edge" that re-fires the whole viewing set (a runaway loop
+        seen live 2026-07-25 when a housekeeper unplugged a bias light). Non-edge
+        ``BiasOff`` writes are suppressed once the off has landed — re-PUTing off
+        to the whole viewing set every tick, all night, is pure queue pressure.
         """
         bias = self._bias
         if bias is None:
@@ -547,7 +569,7 @@ class CircadianDaemon:
                 len(bias.lights),
                 bias.transition_ms / 1000,
             )
-        all_ok = True
+        latch = True   # clears only on a *transient* failure worth retrying
         for action in bias_actions(
             bias, tv_on=tv_on, in_window=in_window, curve=curve,
             transition_ms=self._spec.transition_ms, fade_off_ms=self._spec.fade_off_ms,
@@ -563,36 +585,42 @@ class CircadianDaemon:
                     mirek=(look.color.mirek if look.color else None),
                     hex=(look.color.hex if look.color else None),
                 )
-                ok = self._write_light(rid, target, action.transition_ms)
+                result = self._write_light(rid, target, action.transition_ms)
                 self._bias_off_written.discard(rid)
             elif isinstance(action, BiasDrive):
-                ok = self._write_light(
+                result = self._write_light(
                     rid, TargetState(on=True, brightness=action.brightness,
                                      mirek=action.mirek, hex=None), action.transition_ms)
                 self._bias_off_written.discard(rid)
             else:  # BiasOff
                 if rid in self._bias_off_written:
                     continue  # already off; nothing to re-write until an edge
-                ok = self._write_light(rid, TargetState.off(), action.transition_ms)
-                if ok:
+                result = self._write_light(rid, TargetState.off(), action.transition_ms)
+                if result is _BiasWrite.OK:
                     self._bias_off_written.add(rid)
-            all_ok = all_ok and ok
-        if all_ok:
-            self._bias_last_applied_on = tv_on   # edge fully applied
+            if result is _BiasWrite.FAILED:
+                latch = False   # transient reject — retry on the next apply
+        if latch:
+            # Latch once every write landed or hit a dead device: an unreachable
+            # bulb must not perpetually re-arm the edge (see the docstring).
+            self._bias_last_applied_on = tv_on
 
-    def _write_light(self, rid: str, target: TargetState, transition_ms: int) -> bool:
-        """PUT a single ``light`` body; a transient failure is logged and skipped.
+    def _write_light(self, rid: str, target: TargetState, transition_ms: int) -> _BiasWrite:
+        """PUT a single ``light`` body; a failure is logged and classified.
 
-        Returns True on success so :meth:`_apply_bias` can avoid latching an
-        edge whose writes the bridge rejected (e.g. 'command queue is full').
+        Returns :class:`_BiasWrite` so :meth:`_apply_bias` can tell three cases
+        apart: a clean write (``OK``), a *transient* bridge rejection to retry
+        (``FAILED``, e.g. 'command queue is full'), and an *unreachable* device
+        (``UNREACHABLE``, a bulb that is unplugged/off-at-the-wall) which must
+        not stall the edge latch — the bridge will report it every tick forever.
         """
         body = LightCommand.build(target, transition_ms)
         try:
             self._client.update_resource("light", rid, body)
-            return True
+            return _BiasWrite.OK
         except BridgeError as e:
             _LOG.warning("bias write to %s failed (%s); skipping", rid, e)
-            return False
+            return _BiasWrite.UNREACHABLE if e.unreachable else _BiasWrite.FAILED
 
     def _write(self, target: TargetState, transition_ms: int) -> bool:
         """Serialise ``target`` and PUT it.

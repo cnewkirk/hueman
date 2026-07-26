@@ -112,3 +112,21 @@ new INFO log lines. The `.bak-prewebos` config backup and the debug watchers
   bias; worth a later look).
 - LG standby port flap: not observed tonight (both reopen events were the user);
   the 5 s debounce is retained unchanged.
+
+## Addendum 2026-07-26 — unreachable bulb must not stall the edge latch
+
+The "a failed write leaves the edge unlatched so the next apply retries" rule
+above was correct for *transient* bridge rejections but wrong for a bulb that is
+gone. On 2026-07-25 a housekeeper unplugged a bias light; its write failed on
+every tick, so `_bias_last_applied_on` never caught up to `tv_on`, the 2 s
+control-file poll read every cycle as a fresh TV flip, and the daemon re-fired
+the whole viewing set every ~2 s for hours (293 edge fades in 3 min, observed
+live).
+
+Fix (`fix/bias-unreachable-latch`): write failures are classified
+`OK` / `FAILED` / `UNREACHABLE`. `BridgeError.unreachable` is set by the client
+parser when the v2 `errors` array reports a device has "communication issues".
+`_write_light` returns a `_BiasWrite`; the edge latches once every write has
+landed **or hit an unreachable device**, and only `FAILED` (a transient reject)
+still holds the latch open for retry. A dead viewing light now degrades to "that
+bulb is dark" with no cascade; transient-retry behaviour is unchanged.

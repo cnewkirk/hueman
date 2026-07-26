@@ -51,6 +51,41 @@ def test_cacert_mode_uses_ca_bundle(monkeypatch):
     assert c._session.verify == "/etc/ssl/bridge-ca.pem"
 
 
+class _JsonResp:
+    """Minimal stand-in for a requests.Response carrying a decoded v2 body."""
+
+    def __init__(self, body, status_code=200):
+        self._body = body
+        self.status_code = status_code
+
+    def json(self):
+        return self._body
+
+
+def test_parse_flags_communication_issue_as_unreachable():
+    """A per-call 'communication issues' error (an unplugged/off bulb) is raised
+    as a BridgeError marked ``unreachable`` so per-light callers can skip it."""
+    from hueman.errors import BridgeError
+
+    resp = _JsonResp({"errors": [{"description":
+        "device (light) 42c8 has communication issues, command (.on.on) "
+        "may not have effect"}]})
+    with pytest.raises(BridgeError) as ei:
+        HueClient._parse(resp, "PUT", "/clip/v2/resource/light/42c8")
+    assert ei.value.unreachable is True
+
+
+def test_parse_transient_error_is_not_unreachable():
+    """A generic bridge rejection (e.g. a full command queue) is NOT unreachable,
+    so callers keep retrying it rather than treating the device as gone."""
+    from hueman.errors import BridgeError
+
+    resp = _JsonResp({"errors": [{"description": "command queue is full"}]})
+    with pytest.raises(BridgeError) as ei:
+        HueClient._parse(resp, "PUT", "/clip/v2/resource/light/42c8")
+    assert ei.value.unreachable is False
+
+
 def test_create_application_key_non_json_response_is_clean_error(monkeypatch):
     """A captive portal / proxy returning HTML must surface as a HueIacError the
     CLI can print, not a raw requests JSONDecodeError traceback."""

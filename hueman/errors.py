@@ -16,7 +16,20 @@ class ConfigError(HueIacError):
 
 
 class BridgeError(HueIacError):
-    """The bridge returned an error or could not be reached."""
+    """The bridge returned an error or could not be reached.
+
+    ``unreachable`` marks the specific case where the bridge accepted the call
+    but reported that the *target device* has Zigbee communication problems
+    (e.g. a bulb a housekeeper unplugged). That is not a transient bridge
+    rejection to retry — the device is simply gone — so callers driving a set
+    of lights can treat it as "skip this one" rather than "the whole write
+    failed", and not stall on a bulb that will never answer.
+    """
+
+    def __init__(self, *args: object, unreachable: bool = False) -> None:
+        """Build a bridge error; ``unreachable`` flags a dead-device report."""
+        super().__init__(*args)
+        self.unreachable = unreachable
 
 
 class AuthError(BridgeError):

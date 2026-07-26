@@ -156,8 +156,15 @@ class HueClient:
         # v2 reports per-call problems in an "errors" array even on HTTP 200.
         errors = body.get("errors") if isinstance(body, dict) else None
         if errors:
-            msg = "; ".join(e.get("description", str(e)) for e in errors)
-            raise BridgeError(f"{method} {path}: {msg}")
+            descriptions = [e.get("description", str(e)) for e in errors]
+            msg = "; ".join(descriptions)
+            # A Zigbee bulb that is off at the wall / unpaired is reported here as
+            # "device (light) <rid> has communication issues, command may not have
+            # effect" — the call was accepted, the device just can't be reached.
+            # Flag it so per-light callers can skip a dead bulb instead of
+            # treating it as a retryable bridge rejection.
+            unreachable = any("communication issue" in d.lower() for d in descriptions)
+            raise BridgeError(f"{method} {path}: {msg}", unreachable=unreachable)
         if resp.status_code >= 400:
             raise BridgeError(f"{method} {path}: HTTP {resp.status_code}")
         # A successful v2 response is always a JSON object envelope.
