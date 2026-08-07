@@ -260,6 +260,29 @@ def test_hand_off_fades_to_night_look_instead_of_off():
     assert len(daemon._client.writes) == n
 
 
+def test_night_power_cycle_does_not_refire_hand_off():
+    # THE 2026-08-07 LIVE BUG: at night the human turns the zone on; the
+    # off->on power-cycle resumes the daemon (mode DRIVING), and the next
+    # out-of-window tick used to fire the hand-off fade — yanking the lights
+    # they just turned on down to the night look (or off). The hand-off must
+    # fire on the window-CLOSE edge only; an out-of-window resume is inert.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg_night_look(), grouped_light_rid="GL")
+    daemon._tick_once(_epoch(22, 0))               # in window -> driving
+    daemon._tick_once(_epoch(23, 0))               # close edge -> night look (1% red)
+    assert daemon._client.writes[-1][2]["dimming"] == {"brightness": 1.0}
+    t = _epoch(23, 30)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t)
+    assert daemon._controller.mode == "suspended"  # human off at night: hands off
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t + 60)
+    assert daemon._controller.mode == "driving"    # power-cycle resume
+    n = len(daemon._client.writes)
+    daemon._tick_once(t + 90)                      # out-of-window tick after resume
+    assert len(daemon._client.writes) == n         # NO hand-off re-fire, nothing written
+    assert daemon._controller.mode == "night_idle"
+    daemon._tick_once(t + 150)                     # and it stays inert
+    assert len(daemon._client.writes) == n
+
+
 def test_suspended_override_survives_hand_off():
     # A zone the human took over before hand-off must NOT be yanked to the
     # night look at window close — suspended means hands off, including the edge.

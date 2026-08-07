@@ -158,11 +158,16 @@ class CircadianController:
         edge with ``daily_safety_resume`` re-arms driving (so an overnight
         override never silently disables the daemon forever). ``NIGHT_IDLE``
         flips to ``DRIVING`` when the window is active. While driving, an
-        in-window tick returns the curve sample; the first out-of-window tick
-        returns a single ``FadeOff`` and drops to ``NIGHT_IDLE``.
+        in-window tick returns the curve sample; the window-*close* edge
+        returns a single ``FadeOff`` and drops to ``NIGHT_IDLE``. Driving
+        outside the window with no close edge (an out-of-window resume, e.g. a
+        nighttime power-cycle) drops to ``NIGHT_IDLE`` silently — the hand-off
+        already happened, and re-firing it would stomp whatever the human just
+        turned on.
         """
         in_window = self._in_window(now)
         window_opened = in_window and not self._was_in_window
+        window_closed = not in_window and self._was_in_window
         self._was_in_window = in_window
 
         if self._mode == self.SUSPENDED:
@@ -181,4 +186,11 @@ class CircadianController:
         if in_window:
             return self._drive_to(now)
         self._mode = self.NIGHT_IDLE
-        return FadeOff(transition_ms=self._spec.fade_off_ms)
+        if window_closed:
+            return FadeOff(transition_ms=self._spec.fade_off_ms)
+        # DRIVING outside the window without a close edge: an out-of-window
+        # resume (power-cycle or trigger at night). The hand-off already
+        # happened — firing it again would stomp whatever the human just
+        # turned on (observed live 2026-08-07: night power-cycle -> resume ->
+        # FadeOff yanked fresh lights to the 1% night look). Hands off.
+        return Hold("night_idle")
