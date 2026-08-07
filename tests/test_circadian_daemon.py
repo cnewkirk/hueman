@@ -136,6 +136,69 @@ def test_moving_values_never_suspend_even_if_far():
         assert daemon._controller.mode == "driving"
 
 
+def test_tick_defers_drive_over_a_pending_manual_change():
+    # THE STOMP RACE: a human turns the zone up; before the bridge re-emits the
+    # settled value long enough for the SSE path to judge it, a tick lands. The
+    # tick must NOT write the curve target over the unjudged value — doing so
+    # fades the human's change away and the eventual settle-at-target reads as
+    # "self", erasing the override without a trace.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)                                # driving; records cmd target
+    manual = daemon._cmd_brightness - 30.0               # far beyond override_band (8)
+    daemon._handle_event(_dim(manual), t0 + 30)          # the human's change (moves -> unjudged)
+    daemon._tick_once(t0 + 60)                           # tick lands before any re-emit
+    assert len(daemon._client.writes) == 1               # deferred: no second write
+    assert daemon._controller.mode == "driving"          # judgment itself hasn't happened yet
+
+
+def test_tick_classifies_settled_override_without_reemission():
+    # If the bridge never re-emits the settled value, the SSE path alone would
+    # never judge it. The tick must classify it itself — but only after its own
+    # last fade (75s) has had time to land, so the t0+60 tick (still inside the
+    # fade window) defers, and the t0+120 tick suspends.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    manual = daemon._cmd_brightness - 30.0
+    daemon._handle_event(_dim(manual), t0 + 30)          # the change's ONLY event
+    daemon._tick_once(t0 + 60)                           # own fade not landed -> defer, no judgment
+    assert daemon._controller.mode == "driving"
+    daemon._tick_once(t0 + 120)                          # past fade + settle window -> judged
+    assert daemon._controller.mode == "suspended"
+    assert len(daemon._client.writes) == 1               # the change was never overwritten
+
+
+def test_stale_mid_fade_sample_never_false_suspends_on_tick():
+    # A sparse mid-fade sample of the daemon's OWN fade, never re-emitted, must
+    # not be tick-judged as a human override while the fade is still running
+    # (the same trap the post-security grace closed for restores). Once the fade
+    # lands and the bridge emits the target, driving continues normally.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)                                # write #1; fade until t0+75
+    target = daemon._cmd_brightness
+    daemon._handle_event(_dim(target - 20.0), t0 + 40)   # sparse mid-fade sample (moves)
+    daemon._tick_once(t0 + 60)                           # inside own fade: not judged (defers)
+    assert daemon._controller.mode == "driving"
+    daemon._handle_event(_dim(target), t0 + 76)          # fade lands (moves -> resets window)
+    daemon._handle_event(_dim(target), t0 + 79)          # re-emit: held >= window -> self
+    assert daemon._controller.mode == "driving"
+    daemon._tick_once(t0 + 120)                          # judged as self -> drives again
+    assert len(daemon._client.writes) == 2
+
+
+def test_tick_drives_through_pending_value_within_band():
+    # An unjudged value WITHIN override_band of target (our own fade's re-emit,
+    # or a sub-band nudge) must not defer the tick — the curve keeps driving.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    daemon._handle_event(_dim(daemon._cmd_brightness - 2.0), t0 + 30)   # within band, unjudged
+    daemon._tick_once(t0 + 60)
+    assert len(daemon._client.writes) == 2               # not deferred
+
+
 def test_zone_turned_off_while_driving_suspends():
     daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
     t0 = _epoch(12, 0)

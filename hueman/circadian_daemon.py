@@ -26,6 +26,14 @@ own look (no-op); settled beyond the band, or the zone turned off while we expec
 it on, is a human override and the controller suspends. A power cycle
 (off->on while suspended) re-engages the daemon when ``resume_on_power_cycle`` is
 set.
+
+Classification is not left to the event stream alone — that would race the tick.
+The tick judges any settled-but-unjudged value itself (once its own last fade has
+had time to land, so a stale mid-fade sample is never misread), and it *defers*
+its write whenever the zone sits on an unjudged value beyond ``override_band`` of
+target. Without both, a tick landing between a manual change and the bridge's
+re-emission of the settled value would silently fade the change back to the curve
+and then classify its own landing as "self" — the human loses, with no trace.
 """
 
 from __future__ import annotations
@@ -245,6 +253,7 @@ class CircadianDaemon:
         self._obs_since: float = 0.0                # when _obs_brightness last MOVED (epoch)
         self._obs_classified: bool = False          # current settled value already classified?
         self._classify_grace_until: float = 0.0     # no override classification before this (epoch)
+        self._cmd_fade_until: float = 0.0           # when our own last commanded fade lands (epoch)
         self._last_on: bool | None = None           # last observed on-state (power-cycle)
         self._override_band = spec.override_band
         self._settle_window_s = spec.settle_window_ms / 1000.0
@@ -493,24 +502,50 @@ class CircadianDaemon:
         if self._security_active:
             return  # security mode owns the lights; skip the normal circadian/bias tick
         with self._lock:
+            # Judge any settled-but-unjudged value BEFORE deciding this tick, so
+            # a manual change suspends us even if the bridge never re-emitted it
+            # (the SSE path alone races this tick's write). Guarded past our own
+            # last fade: tick-side silence during a commanded fade means "no
+            # event yet", not "value held", and judging a stale mid-fade sample
+            # would false-suspend (the post-security-restore lesson, 2026-07-03).
+            if now >= self._cmd_fade_until + self._settle_window_s:
+                self._classify_settled_locked(now)
             action = self._controller.tick(now)
             if isinstance(action, DriveTo):
-                _LOG.info(
-                    "drive %r -> %.0f%% / %d mirek (%.0fs fade)",
-                    self._spec.zone,
-                    action.brightness,
-                    action.mirek,
-                    action.transition_ms / 1000,
-                )
-                target = TargetState(
-                    on=True, brightness=action.brightness, mirek=action.mirek, hex=None
-                )
-                # Record the commanded target only once the bridge accepts it, so
-                # the settle detector can tell our own fade apart from a human dim
-                # — a target the zone never received must not suspend us later.
-                if self._write(target, action.transition_ms):
-                    self._cmd_brightness = action.brightness
-                    self._cmd_on = True
+                if (
+                    self._obs_brightness is not None
+                    and not self._obs_classified
+                    and abs(self._obs_brightness - action.brightness) > self._override_band
+                ):
+                    # The zone sits far from target on a value nobody has judged
+                    # yet (likely a human mid-adjustment). Never write over it:
+                    # skip this tick, let the SSE path or a later tick classify.
+                    # Skipping also leaves _cmd_fade_until untouched, so the
+                    # judgment above can run next tick even with no new events.
+                    _LOG.info(
+                        "deferring drive: zone at %.1f%% (target %.1f%%) not yet judged",
+                        self._obs_brightness,
+                        action.brightness,
+                    )
+                else:
+                    _LOG.info(
+                        "drive %r -> %.0f%% / %d mirek (%.0fs fade)",
+                        self._spec.zone,
+                        action.brightness,
+                        action.mirek,
+                        action.transition_ms / 1000,
+                    )
+                    target = TargetState(
+                        on=True, brightness=action.brightness, mirek=action.mirek, hex=None
+                    )
+                    # Record the commanded target only once the bridge accepts
+                    # it, so the settle detector can tell our own fade apart
+                    # from a human dim — a target the zone never received must
+                    # not suspend us later.
+                    if self._write(target, action.transition_ms):
+                        self._cmd_brightness = action.brightness
+                        self._cmd_on = True
+                        self._cmd_fade_until = now + action.transition_ms / 1000.0
             elif isinstance(action, FadeOff):
                 _LOG.info(
                     "hand-off: fading %r off over %.0fs (night-idle until next window)",
@@ -522,6 +557,7 @@ class CircadianDaemon:
                 if self._write(TargetState.off(), action.transition_ms):
                     self._cmd_on = False
                     self._cmd_brightness = 0.0
+                    self._cmd_fade_until = now + action.transition_ms / 1000.0
             elif isinstance(action, Hold):
                 _LOG.debug("hold: %s", action.reason)
             self._poll_control_file(now)
@@ -1190,39 +1226,57 @@ class CircadianDaemon:
                 self._obs_classified = False
                 return
             # holding within epsilon of the last observed value
-            if self._obs_classified:
-                return
-            if now - self._obs_since < self._settle_window_s:
-                return  # not stable long enough yet
-            # SETTLED on a single value for >= settle_window.
-            self._obs_classified = True
-            if now < self._classify_grace_until:
-                _LOG.debug(
-                    "settled at %.1f%% within post-restore grace -> not classified", bri)
-                return
-            # TODO(housekeeper-resilience): `bri` is the *grouped* brightness, an
-            # aggregate over the zone's members. An unreachable Circadian Core
-            # member (a bulb a housekeeper unplugged) can hold that aggregate
-            # off-target and trip a false "manual override -> suspend" — the core
-            # twin of the bias-latch cascade fixed in #8. Audit: fold
-            # zigbee_connectivity into this comparison so a connectivity_issue
-            # member can't suspend the day drive. (Not yet observed live; the
-            # 2026-07-25 core suspend was a genuine manual zone-off.)
-            if (
-                self._controller.mode != CircadianController.SUSPENDED
-                and self._cmd_on
-                and self._cmd_brightness is not None
-                and abs(bri - self._cmd_brightness) > self._override_band
-            ):
-                _LOG.info(
-                    "manual override: settled at %.1f%% vs target %.1f%% -> suspended",
-                    bri,
-                    self._cmd_brightness,
-                )
-                self._controller.on_external_change(now)
-                self._rhythm_note_manual(now)
-            else:
-                target_str = "?" if self._cmd_brightness is None else f"{self._cmd_brightness:.1f}%"
-                _LOG.debug(
-                    "settled at %.1f%% (within band of target %s) -> self", bri, target_str
-                )
+            self._classify_settled_locked(now)
+
+    def _classify_settled_locked(self, now: float) -> None:
+        """Judge a settled-but-unjudged brightness against the commanded target.
+
+        Caller holds the lock. A no-op unless the observed value has *held*
+        (no move within ``settle_epsilon``) for at least ``settle_window`` and
+        has not been classified yet. Settled beyond ``override_band`` of the
+        commanded target is a human override -> suspend; within the band it is
+        our own look -> no-op.
+
+        Called from two places: the SSE path when the bridge re-emits a held
+        value, and the tick (guarded by ``_cmd_fade_until``) so a judgment
+        never waits on the bridge's re-emission cadence — without the tick-side
+        call, a tick landing before the re-emission would stomp a manual change
+        that was never judged.
+        """
+        if self._obs_brightness is None or self._obs_classified:
+            return
+        if now - self._obs_since < self._settle_window_s:
+            return  # not stable long enough yet
+        # SETTLED on a single value for >= settle_window.
+        self._obs_classified = True
+        bri = self._obs_brightness
+        if now < self._classify_grace_until:
+            _LOG.debug(
+                "settled at %.1f%% within post-restore grace -> not classified", bri)
+            return
+        # TODO(housekeeper-resilience): `bri` is the *grouped* brightness, an
+        # aggregate over the zone's members. An unreachable Circadian Core
+        # member (a bulb a housekeeper unplugged) can hold that aggregate
+        # off-target and trip a false "manual override -> suspend" — the core
+        # twin of the bias-latch cascade fixed in #8. Audit: fold
+        # zigbee_connectivity into this comparison so a connectivity_issue
+        # member can't suspend the day drive. (Not yet observed live; the
+        # 2026-07-25 core suspend was a genuine manual zone-off.)
+        if (
+            self._controller.mode != CircadianController.SUSPENDED
+            and self._cmd_on
+            and self._cmd_brightness is not None
+            and abs(bri - self._cmd_brightness) > self._override_band
+        ):
+            _LOG.info(
+                "manual override: settled at %.1f%% vs target %.1f%% -> suspended",
+                bri,
+                self._cmd_brightness,
+            )
+            self._controller.on_external_change(now)
+            self._rhythm_note_manual(now)
+        else:
+            target_str = "?" if self._cmd_brightness is None else f"{self._cmd_brightness:.1f}%"
+            _LOG.debug(
+                "settled at %.1f%% (within band of target %s) -> self", bri, target_str
+            )
