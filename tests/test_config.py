@@ -237,6 +237,30 @@ def test_circadian_daemon_defaults():
     assert d.override_band == 8.0
     assert d.settle_window_ms == 2_500
     assert d.settle_epsilon == 0.75
+    assert d.night_look is None             # default: hand-off fades the zone off
+
+
+def test_circadian_daemon_night_look():
+    from hueman.config import Config
+    cfg = Config.parse(_cfg_doc({"circadian_daemon": {
+        "zone": "Z", "night_look": {"brightness": 1, "hex": "#ff0000"}}}))
+    look = cfg.circadian_daemon.night_look
+    assert look is not None and look.on is True
+    assert look.brightness == 1.0
+    assert look.color is not None and look.color.hex is not None
+
+
+def test_circadian_daemon_night_look_requires_brightness_and_static_colour():
+    from hueman.config import Config
+    with pytest.raises(ConfigError):   # no brightness
+        Config.parse(_cfg_doc({"circadian_daemon": {
+            "zone": "Z", "night_look": {"hex": "#ff0000"}}}))
+    with pytest.raises(ConfigError):   # no colour
+        Config.parse(_cfg_doc({"circadian_daemon": {
+            "zone": "Z", "night_look": {"brightness": 1}}}))
+    with pytest.raises(ConfigError):   # circadian isn't a static look
+        Config.parse(_cfg_doc({"circadian_daemon": {
+            "zone": "Z", "night_look": {"brightness": 1, "color": "circadian"}}}))
 
 
 def test_circadian_daemon_overrides_and_anchor():

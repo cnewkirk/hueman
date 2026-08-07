@@ -229,6 +229,51 @@ def test_own_fade_off_does_not_suspend():
     assert daemon._controller.mode != "suspended"
 
 
+def _cfg_night_look():
+    return Config.parse({
+        "bridge": {"host": "x", "application_key": "k"},
+        "location": {"lat": 45.5152, "lon": -122.6784, "tz_offset_hours": -7},
+        "motion_policies": [],
+        "circadian_daemon": {
+            "zone": "Night Guide", "interval": "60s", "transition": "75s",
+            "night_look": {"brightness": 1, "hex": "#ff0000"},
+        },
+    })
+
+
+def test_hand_off_fades_to_night_look_instead_of_off():
+    # With night_look configured, window close parks the zone at the static
+    # look (min-brightness red) rather than fading it off, then goes night-idle.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg_night_look(), grouped_light_rid="GL")
+    daemon._tick_once(_epoch(22, 0))       # in window -> driving
+    daemon._tick_once(_epoch(23, 0))       # past hand-off (22:34) -> night look
+    rtype, rid, body = daemon._client.writes[-1]
+    assert body["on"] == {"on": True}
+    assert body["dimming"] == {"brightness": 1.0}
+    assert "color" in body                 # hex -> CIE xy
+    assert daemon._cmd_on is True          # the 1% look is OUR commanded state
+    assert daemon._cmd_brightness == 1.0
+    assert daemon._controller.mode == "night_idle"
+    # night-idle holds: the next tick writes nothing over an overnight manual change.
+    n = len(daemon._client.writes)
+    daemon._tick_once(_epoch(23, 1))
+    assert len(daemon._client.writes) == n
+
+
+def test_suspended_override_survives_hand_off():
+    # A zone the human took over before hand-off must NOT be yanked to the
+    # night look at window close — suspended means hands off, including the edge.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg_night_look(), grouped_light_rid="GL")
+    t0 = _epoch(22, 0)
+    daemon._tick_once(t0)                  # driving
+    daemon._handle_event(_dim(90.0), t0 + 30)      # manual change, far from target
+    daemon._handle_event(_dim(90.0), t0 + 45)      # held >= settle_window -> suspended
+    assert daemon._controller.mode == "suspended"
+    n = len(daemon._client.writes)
+    daemon._tick_once(_epoch(23, 0))       # past hand-off: Hold, not night look
+    assert len(daemon._client.writes) == n
+
+
 # -- resume_trigger --------------------------------------------------------- #
 def test_resume_trigger_scene_event_resumes():
     # A scene whose rid matches the resolved resume trigger re-engages the daemon.

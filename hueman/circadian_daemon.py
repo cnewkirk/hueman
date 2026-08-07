@@ -547,17 +547,41 @@ class CircadianDaemon:
                         self._cmd_on = True
                         self._cmd_fade_until = now + action.transition_ms / 1000.0
             elif isinstance(action, FadeOff):
-                _LOG.info(
-                    "hand-off: fading %r off over %.0fs (night-idle until next window)",
-                    self._spec.zone,
-                    action.transition_ms / 1000,
-                )
-                # Mark our own fade-off (so the ensuing on:false event is read as
-                # ours, not a human turning the zone off) only if it was accepted.
-                if self._write(TargetState.off(), action.transition_ms):
-                    self._cmd_on = False
-                    self._cmd_brightness = 0.0
-                    self._cmd_fade_until = now + action.transition_ms / 1000.0
+                look = self._spec.night_look
+                if look is not None:
+                    # Hand-off to a static night look instead of off (all-night
+                    # guidance now that no motion automation provides it). One
+                    # write at the window-close edge; night-idle after, so an
+                    # overnight manual change is never re-driven.
+                    _LOG.info(
+                        "hand-off: fading %r to night look %.1f%% over %.0fs "
+                        "(night-idle until next window)",
+                        self._spec.zone,
+                        look.brightness,
+                        action.transition_ms / 1000,
+                    )
+                    target = TargetState(
+                        on=True, brightness=look.brightness,
+                        mirek=(look.color.mirek if look.color else None),
+                        hex=(look.color.hex if look.color else None),
+                    )
+                    if self._write(target, action.transition_ms):
+                        self._cmd_on = True
+                        self._cmd_brightness = look.brightness
+                        self._cmd_fade_until = now + action.transition_ms / 1000.0
+                else:
+                    _LOG.info(
+                        "hand-off: fading %r off over %.0fs (night-idle until next window)",
+                        self._spec.zone,
+                        action.transition_ms / 1000,
+                    )
+                    # Mark our own fade-off (so the ensuing on:false event is
+                    # read as ours, not a human turning the zone off) only if it
+                    # was accepted.
+                    if self._write(TargetState.off(), action.transition_ms):
+                        self._cmd_on = False
+                        self._cmd_brightness = 0.0
+                        self._cmd_fade_until = now + action.transition_ms / 1000.0
             elif isinstance(action, Hold):
                 _LOG.debug("hold: %s", action.reason)
             self._poll_control_file(now)

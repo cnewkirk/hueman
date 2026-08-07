@@ -841,6 +841,11 @@ class CircadianDaemonSpec:
     # Daemon-native TV bias hold (optional). Defaulted (and last) so existing
     # test helpers / for_test paths keep working unchanged.
     bias: "BiasSpec | None" = None
+    # Optional static look the zone is faded to at hand-off INSTEAD of off
+    # (e.g. minimum-brightness red as all-night guidance). Written once at the
+    # window-close edge; the daemon then goes night-idle, so overnight manual
+    # changes are never re-driven.
+    night_look: "LightState | None" = None
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_daemon") -> "CircadianDaemonSpec":
@@ -880,7 +885,27 @@ class CircadianDaemonSpec:
             settle_window_ms=parse_duration(mo.get("settle_window", "2500ms"), ctx=f"{ctx}.manual_override.settle_window"),
             settle_epsilon=float(mo.get("settle_epsilon", 0.75)),
             bias=BiasSpec.parse(d["bias"], f"{ctx}.bias") if d.get("bias") else None,
+            night_look=cls._parse_night_look(d.get("night_look"), f"{ctx}.night_look"),
         )
+
+    @staticmethod
+    def _parse_night_look(value: Any, ctx: str) -> "LightState | None":
+        """Parse the optional ``night_look:`` block (a static hold, like a bias look)."""
+        if value is None:
+            return None
+        d = _as_dict(value, ctx)
+        if "brightness" not in d:
+            raise ConfigError(f"{ctx}: 'brightness' is required for a night look")
+        try:
+            bri = float(d["brightness"])
+        except (TypeError, ValueError):
+            raise ConfigError(f"{ctx}: brightness must be a number, got {d['brightness']!r}")
+        if not 0 <= bri <= 100:
+            raise ConfigError(f"{ctx}: brightness must be 0-100")
+        color = Color.parse(d, ctx)  # requires mirek/kelvin/hex
+        if color.mode == "circadian":
+            raise ConfigError(f"{ctx}: a night look must be a static colour, not 'circadian'")
+        return LightState(on=True, brightness=bri, color=color)
 
 
 @dataclass(frozen=True)

@@ -190,7 +190,11 @@ Key sections:
   and `circadian_scene`).
 - `areas` — declarative room/zone light assignment.
 - `circadian_daemon` — the resident runtime: `zone`, drive window (`start`,
-  `hand_off`), `interval`/`transition`/`fade_off`, manual-override handling, and
+  `hand_off`), `interval`/`transition`/`fade_off`, manual-override handling,
+  an optional `night_look:` (a static `brightness` + colour the zone is parked
+  at when the window closes, instead of fading off — e.g. minimum-brightness
+  red as all-night guidance; written once at the hand-off edge, so overnight
+  manual changes are never re-driven), and
   the `bias:` block (per-light TV looks + `triggers:` probe/sse/control-file,
   with a short `transition` edge fade for TV on/off flips).
 - `circadian_scene` — generate a smooth, sun-anchored circadian `smart_scene`
