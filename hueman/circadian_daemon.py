@@ -670,6 +670,7 @@ class CircadianDaemon:
         latch = True   # clears only on a *transient* failure worth retrying
         for action in bias_actions(
             bias, tv_on=tv_on, in_window=in_window, curve=curve,
+            night_look=self._spec.night_look,
             transition_ms=self._spec.transition_ms, fade_off_ms=self._spec.fade_off_ms,
             edge=edge,
         ):
