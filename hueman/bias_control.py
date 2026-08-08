@@ -75,15 +75,12 @@ def bias_actions(
     * otherwise ``idle == "circadian"``: join whatever the rest of the home is
       doing. In window with a ``curve`` sample -> follow the curve (same
       brightness/mirek as the main set). Out of window (or in window with no
-      curve sample) and ``night_look`` is configured -> hold that same look
-      (same colour as the main zone's own parked state), at ``night_look``'s
-      own brightness unless the light declares its own ``night_brightness``
-      (e.g. an indirect/uplight fixture that needs more lumens than a direct
-      one to read the same) — a circadian-idle light must never go dark on
-      its own just because the window closed; it should read as part of one
-      home, not a separate "viewing" island (observed live 2026-08-08:
-      TV-viewing lights going fully off overnight while the rest of the home
-      sat at a dim night_look read as broken, not "TV is off").
+      curve sample) and ``night_look`` is configured -> hold that same look,
+      same as the main zone's own parked state — a circadian-idle light must
+      never go dark on its own just because the window closed; it should read
+      as part of one home, not a separate "viewing" island (observed live
+      2026-08-08: TV-viewing lights going fully off overnight while the rest
+      of the home sat at a dim night_look read as broken, not "TV is off").
     * otherwise (``idle == "off"``, or ``idle == "circadian"`` with no
       ``night_look`` and no curve) -> fade off.
 
@@ -100,10 +97,7 @@ def bias_actions(
         elif light.idle == "circadian" and in_window and curve is not None:
             actions.append(BiasDrive(light.name, curve.brightness, curve.mirek, fade))
         elif light.idle == "circadian" and night_look is not None:
-            look = night_look
-            if light.night_brightness is not None:
-                look = LightState(on=True, brightness=light.night_brightness, color=night_look.color)
-            actions.append(BiasHold(light.name, look, fade))
+            actions.append(BiasHold(light.name, night_look, fade))
         else:
             actions.append(BiasOff(light.name, off_fade))
     return actions

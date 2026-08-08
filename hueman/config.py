@@ -703,19 +703,11 @@ class BiasLight:
         look: The static hold look (always on; a concrete colour, never circadian).
         idle: What the light does when the TV is off — ``"circadian"`` (follow the
             curve while in the daemon's active window) or ``"off"``.
-        night_brightness: Optional per-light brightness override (0-100) used
-            instead of ``night_look``'s own brightness when this light joins
-            the night theme out of window — same colour as everyone else, but
-            calibrated for this fixture's mount (e.g. an indirect uplight
-            needs more lumens than a direct one to read the same). ``None``
-            uses ``night_look``'s brightness unchanged, same as every other
-            ``idle: circadian`` light.
     """
 
     name: str
     look: LightState
     idle: str
-    night_brightness: float | None = None
 
     @classmethod
     def parse(cls, name: str, value: Any, ctx: str) -> "BiasLight":
@@ -725,8 +717,6 @@ class BiasLight:
         colour — ``circadian`` is rejected because a hold has to be a fixed
         target. ``idle`` must be ``circadian`` or ``off``; a YAML-1.1 bare
         ``off`` (parsed as ``False``) is accepted as the string ``"off"``.
-        ``night_brightness`` (0-100, optional) overrides just the brightness
-        this light uses when it joins ``night_look``.
         """
         d = _as_dict(value, ctx)
         look_d = _as_dict(_require(d, "look", ctx), f"{ctx}.look")
@@ -748,19 +738,7 @@ class BiasLight:
         idle = "off" if raw_idle is False else str(raw_idle)
         if idle not in ("circadian", "off"):
             raise ConfigError(f"{ctx}.idle must be 'circadian' or 'off'")
-        night_bri: float | None = None
-        if "night_brightness" in d:
-            try:
-                night_bri = float(d["night_brightness"])
-            except (TypeError, ValueError):
-                raise ConfigError(
-                    f"{ctx}.night_brightness must be a number, got {d['night_brightness']!r}")
-            if not 0 <= night_bri <= 100:
-                raise ConfigError(f"{ctx}.night_brightness must be 0-100")
-        return cls(
-            name=str(name), look=LightState(on=True, brightness=bri, color=color), idle=idle,
-            night_brightness=night_bri,
-        )
+        return cls(name=str(name), look=LightState(on=True, brightness=bri, color=color), idle=idle)
 
 
 @dataclass(frozen=True)
