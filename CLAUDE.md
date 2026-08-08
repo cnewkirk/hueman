@@ -112,10 +112,8 @@ Operational gotchas (all observed live on a Bridge Pro):
 
 When the TV is on, a configured set of viewing lights holds a steady "TV mode"
 bias look **while the rest of the home keeps driving the circadian curve**;
-when the TV turns off each light returns to its configured idle behaviour.
-Being on TV duty is the *only* thing that sets a bias light apart from the
-rest of the home — TV off means rejoin whatever theme everyone else is on,
-not switch to a separate schedule of its own. This is built **into the
+when the TV turns off each light returns to its configured idle behaviour
+(`circadian` rejoins the curve, `off` goes dark). This is built **into the
 circadian daemon** (`circadian_daemon.py` + pure `bias_control.py`), NOT as a
 bridge scene — a single-grouped_light, suspend-on-override daemon can't hold a
 sub-zone while the rest keeps moving. See
@@ -125,13 +123,6 @@ sub-zone while the rest keeps moving. See
 How it works (config: `circadian_daemon.bias`):
 - **Per-light** drive of the bias set; the daemon owns the look
   (`bias.lights[*].look`) and each light's `idle` (`circadian` or `off`).
-  `idle: circadian` follows the curve while in-window, and — since
-  2026-08-08 — holds `night_look` out of window instead of going dark, if
-  `night_look` is configured (falls back to off if it isn't). Going fully
-  dark on its own overnight, independent of TV state, read as broken, not
-  intentional, when it first shipped (live report 2026-08-08): the whole
-  point is TV-on being the one exception, not a standing "viewing set"
-  identity with its own day/night rules.
 - **No bias light may sit in the daemon's driven zone** or the 60 s
   grouped_light tick stomps its held look. Keep the driven zone and the bias
   set disjoint.
@@ -184,42 +175,6 @@ Triggers (OR-combined, no arming): `hueman security on|off` (writes the
 adapter (e.g. Home Assistant) watches the cue file / webhook and plays the
 matching sound. That adapter is out of this repo's scope.
 
-## Night-guide — daemon-native motion path lighting, with a clean hand-back
-
-`circadian_daemon.night_guide` (optional) is a third actor sharing the driven
-zone with the operator and the circadian curve: while the zone is out of the
-circadian window (parked at `night_look`, or off), motion on a configured
-MotionAware `area` briefly raises it to a soft guide `look` (e.g. dim red, for
-a night trip to the bathroom/kitchen), then hands control back once `timeout`
-elapses with no further motion — repeated motion extends the episode from the
-*latest* event, not the first, so it doesn't blink off mid-trip.
-
-The hand-back is exact where it has to be and recomputed everywhere else:
-- A real manual override showing when the guide engages (`SUSPENDED`) gets
-  snapshotted (a raw `grouped_light` GET) before the guide look overwrites it,
-  and restored **verbatim** on hand-back — a manual look is arbitrary, not
-  derivable from anything else, so it has to be remembered.
-- Otherwise (ordinary circadian/`night_look` was showing) there's always a
-  derivable correct target, so hand-back recomputes it fresh instead of
-  replaying a snapshot — the current curve sample if the window opened back
-  up during the episode, otherwise the normal resting state (`night_look` or
-  off). Same recompute-when-possible split `_restore_after_security` uses.
-  `Hold` alone would leave the guide look showing forever — it assumes
-  nothing changed underneath it, which is false here.
-
-Built daemon-native (pure `nightguide_control.py` timing + I/O in
-`circadian_daemon.py`), not as a bridge-native MotionAware `behavior_instance`
-or left to the Bridge Pro's own convenience-motion feature: neither has any
-concept of "restore whatever was there before" — both only know a *fixed*
-configured fallback action, which is exactly what made native motion recalls
-fight manual overrides and the daemon's own resume logic before this existed
-(2026-08-08 incident, ops-repo memory `resume-race-stale-cmd-reference`).
-Consuming the same MotionAware SSE events `rhythm` already reads (both are
-independent consumers of the same event — see `_handle_event`), night-guide
-never fights the operator (an override suspends and stays suspended straight
-through a guide episode) or the curve (circadian reclaims the zone the
-instant its window opens, mid-episode or not).
-
 ## Rhythm engine — observe-stage day-phase inference
 
 `rhythm:` (optional, alongside `circadian_daemon:`) runs a closed-loop
@@ -251,7 +206,6 @@ The codebase is split into a **pure decision layer** (fully unit-tested, no I/O)
 | `circadian_control.py` | Pure daemon state machine (`CircadianController`): drive window, `DriveTo`/`FadeOff`/`Hold` decisions, settle-and-compare override detection. |
 | `bias_control.py` | Pure TV-bias core: `bias_actions` (per-light hold/drive/off with edge-aware fades) + `TriggerAggregator` (OR-combined, debounced trigger sources). |
 | `security_control.py` | Pure security-mode core: `SecurityController` (ALERT breathe → luminance-capped CHAOS frames). |
-| `nightguide_control.py` | Pure night-guide timing core: `NightGuideController` (IDLE ↔ GUIDING, timeout measured from the latest motion). |
 | `engine.py` | Per-area state machine (`PolicyEngine`) for the legacy `watch` runtime. Consumes `MotionPolicy` + explicit `ts` floats; emits `Action` values. Four phases: `STANDBY`, `ACTIVE`, `DIMMING`, `OVERRIDDEN`. |
 | `payload.py` | Converts engine `TargetState` → CLIP v2 request bodies (sRGB `#rrggbb` → CIE xy). |
 | `nightmotion.py` | Pure night-motion helpers: builds CLIP `scene` bodies, transforms the MotionAware `behavior_instance`, and `scene_actions_match` (tolerant scene-look diff, reused by the circadian reconciler). |
@@ -266,7 +220,7 @@ The codebase is split into a **pure decision layer** (fully unit-tested, no I/O)
 | `client.py` | CLIP API v2 HTTP client (`HueClient`). |
 | `pin.py` | Trust-on-first-use TLS pinning (SHA-256 of bridge cert → `.hue-pin.json`). |
 | `state.py` | Loads live bridge state; resolves resource names → ids (`BridgeState`), including MotionAware areas/services. |
-| `circadian_daemon.py` | The resident daemon (`CircadianDaemon`): 60s curve ticks + SSE event loop + TV-bias triggers (probe thread / SSE / control files) + security show + night-guide motion hold + rhythm-engine ticks, all serialised under one lock. |
+| `circadian_daemon.py` | The resident daemon (`CircadianDaemon`): 60s curve ticks + SSE event loop + TV-bias triggers (probe thread / SSE / control files) + security show + rhythm-engine ticks, all serialised under one lock. |
 | `watch.py` | **Legacy** SSE event loop (`MotionController`) for `motion_policies`. Its echo-buffer override detection predates the bridge's periodic re-emission of settled values (the daemon's settle-and-compare replaced it), and it requires legacy PIR sensors. |
 | `cli.py` | `argparse`-based CLI (`Cli`). Subcommands: `validate`, `auth`, `inventory`, `plan`, `apply`, `preview`, `watch`, `circadian run\|resume`, `rhythm`, `security on\|off\|status`. |
 
