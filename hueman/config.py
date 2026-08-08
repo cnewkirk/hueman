@@ -809,6 +809,60 @@ class BiasSpec:
 
 
 @dataclass(frozen=True)
+class NightGuideSpec:
+    """Daemon-native motion-triggered path lighting for when circadian is parked.
+
+    While the driven zone is out of the circadian window (parked at
+    ``night_look``, or off), motion on the configured MotionAware ``area``
+    briefly raises the zone to ``look`` — a soft guide light for a night trip
+    to the bathroom/kitchen — then hands control back after ``timeout`` with
+    no further motion. The hand-back is exact where it has to be (a real
+    manual override showing before the motion gets snapshotted and restored
+    verbatim — there's nothing else to recompute it from) and recomputed
+    everywhere else (the current circadian curve if back in-window by then,
+    otherwise the normal resting state), the same recompute-when-possible
+    split :meth:`CircadianDaemon._restore_after_security` already uses.
+
+    ``area`` names a ``motion_area_configuration`` (the MotionAware grid,
+    e.g. "Main Room") — run ``hueman inventory`` to list them.
+    """
+
+    area: str
+    look: LightState
+    timeout_ms: int
+    transition_ms: int = 2000
+
+    @classmethod
+    def parse(cls, value: Any, ctx: str = "circadian_daemon.night_guide") -> "NightGuideSpec":
+        """Parse the ``circadian_daemon.night_guide:`` block.
+
+        Requires ``area``, ``look`` (a static colour + brightness, same shape
+        as ``night_look``) and ``timeout``. ``transition`` (the guide-light
+        edge fade) defaults to 2s, matching ``bias.transition``.
+        """
+        d = _as_dict(value, ctx)
+        look_d = _as_dict(_require(d, "look", ctx), f"{ctx}.look")
+        if "brightness" not in look_d:
+            raise ConfigError(f"{ctx}.look: 'brightness' is required for a guide look")
+        try:
+            bri = float(look_d["brightness"])
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"{ctx}.look: brightness must be a number, got {look_d['brightness']!r}")
+        if not 0 <= bri <= 100:
+            raise ConfigError(f"{ctx}.look: brightness must be 0-100")
+        color = Color.parse(look_d, f"{ctx}.look")  # requires mirek/kelvin/hex
+        if color.mode == "circadian":
+            raise ConfigError(f"{ctx}.look: a guide look must be a static colour, not 'circadian'")
+        return cls(
+            area=str(_require(d, "area", ctx)),
+            look=LightState(on=True, brightness=bri, color=color),
+            timeout_ms=parse_duration(_require(d, "timeout", ctx), ctx=f"{ctx}.timeout"),
+            transition_ms=parse_duration(d.get("transition", "2s"), ctx=f"{ctx}.transition"),
+        )
+
+
+@dataclass(frozen=True)
 class CircadianDaemonSpec:
     """Tunables for the persistent circadian daemon (all from YAML, with defaults)."""
 
@@ -846,6 +900,8 @@ class CircadianDaemonSpec:
     # window-close edge; the daemon then goes night-idle, so overnight manual
     # changes are never re-driven.
     night_look: "LightState | None" = None
+    # Daemon-native motion-triggered path lighting (optional). See NightGuideSpec.
+    night_guide: "NightGuideSpec | None" = None
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_daemon") -> "CircadianDaemonSpec":
@@ -886,6 +942,8 @@ class CircadianDaemonSpec:
             settle_epsilon=float(mo.get("settle_epsilon", 0.75)),
             bias=BiasSpec.parse(d["bias"], f"{ctx}.bias") if d.get("bias") else None,
             night_look=cls._parse_night_look(d.get("night_look"), f"{ctx}.night_look"),
+            night_guide=NightGuideSpec.parse(d["night_guide"], f"{ctx}.night_guide")
+            if d.get("night_guide") else None,
         )
 
     @staticmethod
