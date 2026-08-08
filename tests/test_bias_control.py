@@ -58,20 +58,41 @@ def test_tv_off_in_window_circadian_drives_off_idles() -> None:
     assert actions["Couch"].transition_ms == 75_000
 
 
-def test_tv_off_out_of_window_all_off() -> None:
-    """TV off, out of window: even circadian-idle lights go off."""
+def test_tv_off_out_of_window_no_night_look_goes_off() -> None:
+    """TV off, out of window, no night_look configured: circadian-idle falls back to off."""
     spec = _spec(("Couch", "circadian"))
     actions = bias_actions(spec, tv_on=False, in_window=False, curve=None,
                            transition_ms=75_000, fade_off_ms=90_000)
     assert isinstance(actions[0], BiasOff)
 
 
-def test_circadian_idle_without_curve_goes_off() -> None:
-    """In window but no curve sample available -> circadian idle falls back to off."""
+def test_tv_off_out_of_window_joins_the_night_look() -> None:
+    """TV off, out of window, night_look configured: circadian-idle lights join
+    it instead of going dark -- the only thing that handles a light DIFFERENTLY
+    from the rest of the home is the TV being on; TV off should read as one
+    home, not a separate 'viewing set' that goes dark on its own schedule
+    (observed live 2026-08-08: this looked broken, not intentional)."""
+    look = LightState(on=True, brightness=1.0, color=Color(mode="xy", hex="ff0000"))
+    spec = _spec(("Couch", "circadian"), ("Play bars", "off"))
+    actions = {a.light: a for a in bias_actions(
+        spec, tv_on=False, in_window=False, curve=None, night_look=look,
+        transition_ms=75_000, fade_off_ms=90_000)}
+    assert isinstance(actions["Couch"], BiasHold)
+    assert actions["Couch"].look == look
+    assert isinstance(actions["Play bars"], BiasOff)   # idle=off is unaffected either way
+
+
+def test_circadian_idle_without_curve_falls_back_to_night_look_when_in_window() -> None:
+    """In window but no curve sample available: falls back to night_look if set
+    (same 'never go dark on your own' rule), otherwise off."""
+    look = LightState(on=True, brightness=1.0, color=Color(mode="xy", hex="ff0000"))
     spec = _spec(("Couch", "circadian"))
-    actions = bias_actions(spec, tv_on=False, in_window=True, curve=None,
-                           transition_ms=75_000, fade_off_ms=90_000)
-    assert isinstance(actions[0], BiasOff)
+    with_look = bias_actions(spec, tv_on=False, in_window=True, curve=None, night_look=look,
+                             transition_ms=75_000, fade_off_ms=90_000)
+    assert isinstance(with_look[0], BiasHold) and with_look[0].look == look
+    without_look = bias_actions(spec, tv_on=False, in_window=True, curve=None,
+                                transition_ms=75_000, fade_off_ms=90_000)
+    assert isinstance(without_look[0], BiasOff)
 
 
 def _spec_edge(*lights: tuple[str, str], edge_ms: int = 2_000) -> BiasSpec:

@@ -112,8 +112,10 @@ Operational gotchas (all observed live on a Bridge Pro):
 
 When the TV is on, a configured set of viewing lights holds a steady "TV mode"
 bias look **while the rest of the home keeps driving the circadian curve**;
-when the TV turns off each light returns to its configured idle behaviour
-(`circadian` rejoins the curve, `off` goes dark). This is built **into the
+when the TV turns off each light returns to its configured idle behaviour.
+Being on TV duty is the *only* thing that sets a bias light apart from the
+rest of the home — TV off means rejoin whatever theme everyone else is on,
+not switch to a separate schedule of its own. This is built **into the
 circadian daemon** (`circadian_daemon.py` + pure `bias_control.py`), NOT as a
 bridge scene — a single-grouped_light, suspend-on-override daemon can't hold a
 sub-zone while the rest keeps moving. See
@@ -123,6 +125,13 @@ sub-zone while the rest keeps moving. See
 How it works (config: `circadian_daemon.bias`):
 - **Per-light** drive of the bias set; the daemon owns the look
   (`bias.lights[*].look`) and each light's `idle` (`circadian` or `off`).
+  `idle: circadian` follows the curve while in-window, and — since
+  2026-08-08 — holds `night_look` out of window instead of going dark, if
+  `night_look` is configured (falls back to off if it isn't). Going fully
+  dark on its own overnight, independent of TV state, read as broken, not
+  intentional, when it first shipped (live report 2026-08-08): the whole
+  point is TV-on being the one exception, not a standing "viewing set"
+  identity with its own day/night rules.
 - **No bias light may sit in the daemon's driven zone** or the 60 s
   grouped_light tick stomps its held look. Keep the driven zone and the bias
   set disjoint.
