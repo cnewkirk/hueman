@@ -217,6 +217,112 @@ def test_power_cycle_off_then_on_resumes():
     assert daemon._controller.mode == "driving"   # off->on power cycle re-engages
 
 
+# -- resume race: stale cmd reference (live 2026-08-08) --------------------- #
+# THE LIVE 2026-08-08 BUG: overnight motion-triggered brightness churn
+# repeatedly power-cycled the zone. Every "power-cycle -> resumed" was undone
+# by the very next settle judgment, because _cmd_brightness/_cmd_on are never
+# refreshed while SUSPENDED — they're still whatever the daemon last commanded
+# BEFORE the override began — and classify-before-drive (_tick_once) always
+# runs that judgment before the controller gets a chance to redrive and
+# refresh the reference. Resume "worked" only by luck (when nothing moved
+# after the original override), and flapped every time something did. All
+# three resume paths (power-cycle, control-file, resume-trigger scene) shared
+# the bug; `_resume_locked` closes it the same way `_restore_after_security`
+# already closed the identical race for the security-exit path.
+def test_power_cycle_resume_does_not_immediately_resuspend_on_stale_target():
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)                                  # driving; records the target
+    stale_target = daemon._cmd_brightness
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 30)
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 33)   # settles -> suspended
+    assert daemon._controller.mode == "suspended"
+    t1 = t0 + 1000                                         # no further drive since suspension
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t1)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t1 + 1)
+    assert daemon._controller.mode == "driving"            # power-cycle resumed
+    # the just-resumed brightness settles far from the STALE target -- without
+    # the grace reset this re-suspends within one settle window, every time.
+    fresh = stale_target + 40.0
+    daemon._handle_event(_dim(fresh), t1 + 2)
+    daemon._handle_event(_dim(fresh), t1 + 5)               # holds >= settle_window
+    assert daemon._controller.mode == "driving"
+
+
+def test_power_cycle_resume_still_detects_a_genuine_override_after_grace():
+    # The grace is not a permanent hall pass: once the daemon has had a real
+    # tick to redrive (refreshing _cmd_brightness) and the grace window has
+    # elapsed, a genuinely new manual change must still suspend normally.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    stale_target = daemon._cmd_brightness
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 30)
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 33)
+    assert daemon._controller.mode == "suspended"
+    t1 = t0 + 1000
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t1)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t1 + 1)
+    assert daemon._controller.mode == "driving"
+    daemon._tick_once(t1 + 60)                              # a real tick redrives -> fresh target
+    fresh_target = daemon._cmd_brightness
+    assert daemon._controller.mode == "driving"
+    after_grace = t1 + 60 + 75 + 2.5 + 5                    # past transition + settle_window
+    daemon._handle_event(_dim(fresh_target - 25.0), after_grace)
+    daemon._handle_event(_dim(fresh_target - 25.0), after_grace + 3)
+    assert daemon._controller.mode == "suspended"           # a real override still lands
+
+
+def _cfg_manual_override(control_file):
+    return Config.parse({
+        "bridge": {"host": "x", "application_key": "k"},
+        "location": {"lat": 45.5152, "lon": -122.6784, "tz_offset_hours": -7},
+        "motion_policies": [],
+        "circadian_daemon": {
+            "zone": "Night Guide", "interval": "60s", "transition": "75s",
+            "manual_override": {"control_file": control_file},
+        },
+    })
+
+
+def test_control_file_resume_does_not_immediately_resuspend_on_stale_target(tmp_path):
+    resume_file = tmp_path / ".hue-circadian-resume"
+    daemon = CircadianDaemon.for_test(
+        _FakeClient(), _cfg_manual_override(str(resume_file)), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    stale_target = daemon._cmd_brightness
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 30)
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 33)
+    assert daemon._controller.mode == "suspended"
+    resume_file.write_text("resume\n")
+    daemon._tick_once(t0 + 1000)                            # poll_control_file -> resumed
+    assert daemon._controller.mode == "driving"
+    assert not resume_file.exists()                         # consumed
+    fresh = stale_target + 40.0
+    daemon._handle_event(_dim(fresh), t0 + 1002)
+    daemon._handle_event(_dim(fresh), t0 + 1005)
+    assert daemon._controller.mode == "driving"             # not immediately re-suspended
+
+
+def test_resume_trigger_does_not_immediately_resuspend_on_stale_target():
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    daemon._resume_trigger_rid = "SCENE1"
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    stale_target = daemon._cmd_brightness
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 30)
+    daemon._handle_event(_dim(stale_target - 30.0), t0 + 33)
+    assert daemon._controller.mode == "suspended"
+    t1 = t0 + 1000
+    daemon._handle_event(BridgeEvent("scene", "SCENE1", {"recall": {}}), t1)
+    assert daemon._controller.mode == "driving"
+    fresh = stale_target + 40.0
+    daemon._handle_event(_dim(fresh), t1 + 2)
+    daemon._handle_event(_dim(fresh), t1 + 5)
+    assert daemon._controller.mode == "driving"
+
+
 def test_own_fade_off_does_not_suspend():
     # After the daemon's own hand-off fade-off, cmd_on is False; the ensuing
     # on:false from the bridge is ours and must NOT be read as a human override.
