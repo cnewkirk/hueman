@@ -767,40 +767,7 @@ def test_bias_tick_off_out_of_window():
     d._tick_once(t)
     lw = _light_writes(d)
     assert lw["Lplay"]["on"] == {"on": False}
-    assert lw["Lcouch"]["on"] == {"on": False}      # no night_look configured -> off
-
-
-def test_bias_tick_off_out_of_window_joins_night_look():
-    # THE LIVE 2026-08-08 REPORT: with night_look configured, an idle=circadian
-    # viewing light going fully dark overnight (while the rest of the home sat
-    # at a dim night_look) read as broken, not as "TV is off" -- the only thing
-    # that should set a light apart from the rest of the home is the TV being
-    # ON, not a separate day/night schedule of its own.
-    cfg = Config.parse({
-        "bridge": {"host": "x", "application_key": "k"},
-        "location": {"lat": 45.5152, "lon": -122.6784, "tz_offset_hours": -7},
-        "motion_policies": [],
-        "circadian_daemon": {
-            "zone": "Night Guide", "interval": "60s", "transition": "75s",
-            "night_look": {"brightness": 1, "hex": "#ff0000"},
-            "bias": {
-                "lights": {
-                    "Play bars": {"look": {"mirek": 153, "brightness": 28}, "idle": "off"},
-                    "Couch": {"look": {"hex": "1a0a00", "brightness": 5}, "idle": "circadian"},
-                },
-                "triggers": {"sse": {"on_trigger": "On", "off_trigger": "Off"}},
-            },
-        },
-    })
-    d = CircadianDaemon.for_test(_FakeClient(), cfg, grouped_light_rid="GL")
-    d._bias_rids = {"Play bars": "Lplay", "Couch": "Lcouch"}
-    t = _epoch(23, 30)                 # past hand-off 22:34 -> out of window, TV off
-    d._tick_once(t)
-    lw = _light_writes(d)
-    assert lw["Lplay"]["on"] == {"on": False}       # idle=off is unaffected
-    assert lw["Lcouch"]["on"] == {"on": True}        # idle=circadian joins night_look instead
-    assert lw["Lcouch"]["dimming"] == {"brightness": 1.0}
-    assert "color" in lw["Lcouch"]
+    assert lw["Lcouch"]["on"] == {"on": False}      # circadian idle but out of window -> off
 
 
 def test_no_bias_writes_when_no_bias_configured():

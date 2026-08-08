@@ -62,27 +62,16 @@ def bias_actions(
     tv_on: bool,
     in_window: bool,
     curve: DriveTo | None,
-    night_look: LightState | None = None,
     transition_ms: int,
     fade_off_ms: int,
     edge: bool = False,
 ) -> list[BiasHold | BiasDrive | BiasOff]:
     """Return the per-light action for each bias light this tick.
 
-    * ``tv_on`` -> every light holds its ``look`` — the only case any light is
-      handled *differently* from the rest of the home; this is a TV-on-only
-      override, not a standing "viewing set" identity.
-    * otherwise ``idle == "circadian"``: join whatever the rest of the home is
-      doing. In window with a ``curve`` sample -> follow the curve (same
-      brightness/mirek as the main set). Out of window (or in window with no
-      curve sample) and ``night_look`` is configured -> hold that same look,
-      same as the main zone's own parked state — a circadian-idle light must
-      never go dark on its own just because the window closed; it should read
-      as part of one home, not a separate "viewing" island (observed live
-      2026-08-08: TV-viewing lights going fully off overnight while the rest
-      of the home sat at a dim night_look read as broken, not "TV is off").
-    * otherwise (``idle == "off"``, or ``idle == "circadian"`` with no
-      ``night_look`` and no curve) -> fade off.
+    * ``tv_on`` -> every light holds its ``look``.
+    * otherwise ``idle == "circadian"`` and ``in_window`` and a ``curve`` sample is
+      available -> follow the curve (same brightness/mirek as the main set).
+    * otherwise (``idle == "off"``, out of window, or no curve) -> fade off.
 
     ``edge`` marks a committed TV-state flip: every action then fades over the
     short ``spec.transition_ms`` instead of the steady-state ``transition_ms``/
@@ -96,8 +85,6 @@ def bias_actions(
             actions.append(BiasHold(light.name, light.look, fade))
         elif light.idle == "circadian" and in_window and curve is not None:
             actions.append(BiasDrive(light.name, curve.brightness, curve.mirek, fade))
-        elif light.idle == "circadian" and night_look is not None:
-            actions.append(BiasHold(light.name, night_look, fade))
         else:
             actions.append(BiasOff(light.name, off_fade))
     return actions
