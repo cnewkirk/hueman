@@ -276,6 +276,50 @@ def test_power_cycle_resume_still_detects_a_genuine_override_after_grace():
     assert daemon._controller.mode == "suspended"           # a real override still lands
 
 
+def test_power_cycle_resume_at_night_immediately_repaints_to_night_look():
+    # THE LIVE 2026-08-08 FOLLOW-UP: the resume-race fix stopped the daemon
+    # from re-suspending itself, but a resume with no immediate write left
+    # the zone exactly where the override left it until the next real
+    # transition -- a toggle-resume at night produced literally no visible
+    # change (confirmed live: 'power-cycle -> resumed' logged, mode correct,
+    # but the bulbs never moved off the override's brightness). "The toggle
+    # is on" has to mean circadian visibly owns the zone right now, not
+    # eventually.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg_night_look(), grouped_light_rid="GL")
+    daemon._tick_once(_epoch(22, 0))                # driving
+    daemon._tick_once(_epoch(23, 0))                # hand-off -> night_look (1%), night_idle
+    assert daemon._client.writes[-1][2]["dimming"] == {"brightness": 1.0}
+    t = _epoch(23, 30)
+    daemon._handle_event(_dim(42.0), t)             # a real manual change, far from night_look
+    daemon._handle_event(_dim(42.0), t + 3)         # settles -> suspended
+    assert daemon._controller.mode == "suspended"
+    n = len(daemon._client.writes)                 # nothing writes between here and the toggle
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t + 30)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t + 31)
+    assert len(daemon._client.writes) == n + 1      # a NEW write landed on the resume event itself
+    rtype, rid, body = daemon._client.writes[-1]
+    assert body["dimming"] == {"brightness": 1.0}   # repainted to night_look immediately
+    assert daemon._cmd_brightness == 1.0
+    assert daemon._controller.mode == "driving"
+
+
+def test_power_cycle_resume_in_daytime_immediately_redrives_the_curve():
+    # The daytime counterpart: resume shouldn't have to wait up to one
+    # `interval` for the next tick to redrive -- it drives the instant the
+    # toggle lands.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    daemon._handle_event(_dim(daemon._cmd_brightness - 30.0), t0 + 30)
+    daemon._handle_event(_dim(daemon._cmd_brightness - 30.0), t0 + 33)
+    assert daemon._controller.mode == "suspended"
+    n = len(daemon._client.writes)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t0 + 60)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t0 + 61)
+    assert len(daemon._client.writes) == n + 1      # a fresh drive landed on the resume event itself
+    assert daemon._controller.mode == "driving"
+
+
 def _cfg_manual_override(control_file):
     return Config.parse({
         "bridge": {"host": "x", "application_key": "k"},

@@ -760,6 +760,27 @@ class CircadianDaemon:
             )
         return TargetState.off()
 
+    def _drive_or_rest_locked(self, now: float, out_of_window_transition_ms: int) -> None:
+        """Write "whatever circadian should show right now" and land it in ``_cmd_*``.
+
+        The current curve sample if the window is open, otherwise
+        :meth:`_rest_target`. Shared by night-guide's no-snapshot hand-back and
+        general resume (:meth:`_resume_locked`) — both need this exact
+        "recompute and write immediately" behaviour, not a passive wait for the
+        next tick's ``Hold`` to (not) do it. Caller holds the lock.
+        """
+        if self._controller.in_window(now):
+            action = self._controller.drive_to(now)
+            target = TargetState(on=True, brightness=action.brightness, mirek=action.mirek, hex=None)
+            transition_ms = action.transition_ms
+        else:
+            target = self._rest_target()
+            transition_ms = out_of_window_transition_ms
+        if self._write(target, transition_ms):
+            self._cmd_on = target.on
+            self._cmd_brightness = target.brightness if target.on else 0.0
+            self._cmd_fade_until = now + transition_ms / 1000.0
+
     # -- night-guide: motion-triggered path lighting ------------------------ #
     def _night_guide_on_motion_locked(self, now: float) -> None:
         """Handle a motion event for the night-guide feature (caller holds the lock).
@@ -837,17 +858,7 @@ class CircadianDaemon:
             self._cmd_fade_until = now + self._night_guide_transition_ms() / 1000.0
             return
         _LOG.info("night-guide: timeout -> handing back to circadian")
-        if self._controller.in_window(now):
-            action = self._controller.drive_to(now)
-            target = TargetState(on=True, brightness=action.brightness, mirek=action.mirek, hex=None)
-            transition_ms = action.transition_ms
-        else:
-            target = self._rest_target()
-            transition_ms = self._night_guide_transition_ms()
-        if self._write(target, transition_ms):
-            self._cmd_on = target.on
-            self._cmd_brightness = target.brightness if target.on else 0.0
-            self._cmd_fade_until = now + transition_ms / 1000.0
+        self._drive_or_rest_locked(now, self._night_guide_transition_ms())
 
     def _night_guide_transition_ms(self) -> int:
         """The guide's configured edge fade, for its own hand-back writes."""
@@ -874,15 +885,25 @@ class CircadianDaemon:
         comparison, all night, without ever actually redriving.
 
         Discarding the unjudged sample and holding classification for one fade
-        + settle window gives the daemon time to land a fresh drive (or settle
-        into ``NIGHT_IDLE`` outside the window) before judging anything again.
-        Caller holds the lock.
+        + settle window gives the daemon time to land a fresh drive before
+        judging anything again.
+
+        That drive is not left to the next tick, either: a resume with no
+        immediate write left the zone exactly where the override left it
+        until the next real transition (silent out of window — confirmed
+        live 2026-08-08, a toggle-resume at night produced no visible change
+        at all). "The toggle is on" should mean circadian visibly owns the
+        zone right now, not eventually, so this writes the current curve
+        sample (in-window) or the resting state (out of window) immediately —
+        the same :meth:`_drive_or_rest_locked` night-guide's own hand-back
+        uses. Caller holds the lock.
         """
         self._controller.on_resume(now)
         self._obs_brightness = None
         self._obs_classified = False
         self._classify_grace_until = now + (
             self._spec.transition_ms + self._spec.settle_window_ms) / 1000.0
+        self._drive_or_rest_locked(now, self._spec.fade_off_ms)
 
     def _poll_control_file(self, now: float) -> None:
         """Resume the daemon if the external control file is present, then remove it.
