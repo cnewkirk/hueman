@@ -703,36 +703,6 @@ class CircadianDaemon:
             _LOG.warning("write to %s failed (%s); skipping", self._rid, e)
             return False
 
-    def _resume_locked(self, now: float) -> None:
-        """Resume driving and grant a settle-classification grace window.
-
-        Every resume trigger (power-cycle, control-file, resume-trigger scene)
-        just flipped the controller out of SUSPENDED, but the settle-and-compare
-        classifier's ``_cmd_brightness``/``_cmd_on`` reference is stale — it was
-        last set before the suspension began and nothing refreshes it until the
-        daemon lands a real drive. Without this reset, the very next settle
-        judgment (which always runs before that drive gets a chance to happen —
-        see ``_tick_once``) compares the freshly-resumed live brightness against
-        that stale target and re-suspends within one tick, defeating the resume
-        outright. This mirrors the reset already proven in
-        ``_restore_after_security`` (born from the same failure mode observed
-        live 2026-07-03: "settled at 45.6% vs target 99.8%"), which was never
-        ported to the ordinary manual-override resume paths — confirmed live
-        2026-08-08: motion-triggered brightness churn repeatedly power-cycled
-        the zone, and every single resume was undone by the next tick's stale
-        comparison, all night, without ever actually redriving.
-
-        Discarding the unjudged sample and holding classification for one fade
-        + settle window gives the daemon time to land a fresh drive (or settle
-        into ``NIGHT_IDLE`` outside the window) before judging anything again.
-        Caller holds the lock.
-        """
-        self._controller.on_resume(now)
-        self._obs_brightness = None
-        self._obs_classified = False
-        self._classify_grace_until = now + (
-            self._spec.transition_ms + self._spec.settle_window_ms) / 1000.0
-
     def _poll_control_file(self, now: float) -> None:
         """Resume the daemon if the external control file is present, then remove it.
 
@@ -743,7 +713,7 @@ class CircadianDaemon:
         try:
             if os.path.exists(path):
                 _LOG.info("resume via control-file -> driving")
-                self._resume_locked(now)
+                self._controller.on_resume(now)
                 try:
                     os.unlink(path)
                 except FileNotFoundError:
@@ -1233,7 +1203,7 @@ class CircadianDaemon:
                         self._security_aggregator.off(now, "sse")
                 if self._resume_trigger_rid is not None and event.rid == self._resume_trigger_rid:
                     _LOG.info("resume trigger %s -> resumed", event.rid)
-                    self._resume_locked(now)
+                    self._controller.on_resume(now)
                 return
             if (self._presence is not None
                     and event.rtype in ("convenience_area_motion", "security_area_motion")):
@@ -1266,7 +1236,7 @@ class CircadianDaemon:
                         and self._spec.resume_on_power_cycle
                     ):
                         _LOG.info("power-cycle (off->on) -> resumed")
-                        self._resume_locked(now)
+                        self._controller.on_resume(now)
                     self._last_on = True
 
             # -- brightness settle-and-compare ----------------------------- #
