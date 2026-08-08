@@ -82,6 +82,40 @@ def test_tv_off_out_of_window_joins_the_night_look() -> None:
     assert isinstance(actions["Play bars"], BiasOff)   # idle=off is unaffected either way
 
 
+def test_night_brightness_overrides_night_look_brightness_but_keeps_its_colour() -> None:
+    """A light with its own night_brightness (e.g. an indirect/uplight fixture
+    that needs more lumens than a direct one to read the same) uses that
+    brightness instead of night_look's own -- but still night_look's colour,
+    so it still reads as the same theme, just calibrated for its mount."""
+    night_look = LightState(on=True, brightness=1.0, color=Color(mode="xy", hex="ff1400"))
+    spec = BiasSpec(
+        lights=(
+            BiasLight(
+                name="Couch strip",
+                look=LightState(on=True, brightness=24.0, color=Color(mode="ct", mirek=400)),
+                idle="circadian",
+                night_brightness=9.0,
+            ),
+            BiasLight(
+                name="Play bars",
+                look=LightState(on=True, brightness=95.0, color=Color(mode="ct", mirek=153)),
+                idle="circadian",
+            ),
+        ),
+        transition_ms=2_000, sse_on=None, sse_off=None, file_on=None, file_off=None,
+        probe_enabled=False, probe_host=None, probe_mode="tcp", probe_port=3001,
+        probe_interval_ms=5000, probe_debounce_ms=5000,
+    )
+    actions = {a.light: a for a in bias_actions(
+        spec, tv_on=False, in_window=False, curve=None, night_look=night_look,
+        transition_ms=75_000, fade_off_ms=90_000)}
+    assert isinstance(actions["Couch strip"], BiasHold)
+    assert actions["Couch strip"].look.brightness == 9.0        # its own override
+    assert actions["Couch strip"].look.color == night_look.color  # same theme colour
+    assert isinstance(actions["Play bars"], BiasHold)
+    assert actions["Play bars"].look == night_look               # no override -> unchanged
+
+
 def test_circadian_idle_without_curve_falls_back_to_night_look_when_in_window() -> None:
     """In window but no curve sample available: falls back to night_look if set
     (same 'never go dark on your own' rule), otherwise off."""
