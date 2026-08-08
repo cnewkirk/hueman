@@ -34,6 +34,17 @@ its write whenever the zone sits on an unjudged value beyond ``override_band`` o
 target. Without both, a tick landing between a manual change and the bridge's
 re-emission of the settled value would silently fade the change back to the curve
 and then classify its own landing as "self" — the human loses, with no trace.
+
+Night-guide (``circadian_daemon.night_guide``, optional) is a third actor sharing
+the zone: while circadian isn't actively driving it (out of the window — parked
+at ``night_look`` or off), motion on a configured MotionAware area briefly raises
+the zone to a soft guide look, then hands back cleanly once motion stops — an
+exact snapshot restore if a real manual override was showing (nothing else to
+recompute that from), otherwise a recomputed circadian/rest target (see
+:meth:`CircadianDaemon._night_guide_restore_locked`). It never fights the
+operator or the curve: an override still suspends and stays suspended straight
+through a guide episode, and circadian still owns the zone the instant its
+window is open.
 """
 
 from __future__ import annotations
@@ -52,7 +63,7 @@ import threading
 import time
 from collections.abc import Callable
 from enum import Enum
-from typing import cast
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import requests
@@ -67,9 +78,10 @@ from .bias_control import (
 )
 from .circadian_control import CircadianController, DriveTo, FadeOff, Hold
 from .client import HueClient
-from .config import CircadianDaemonSpec, Config, RhythmSpec
+from .config import CircadianDaemonSpec, Config, NightGuideSpec, RhythmSpec
 from .engine import TargetState
 from .errors import AuthError, BridgeError, ConfigError
+from .nightguide_control import NightGuideController
 from .payload import GroupedLightCommand, LightCommand
 from .presence import ActivityEvent, PresenceTracker
 from .rhythm_control import AnchorStore, RhythmEngine, SignalState
@@ -123,6 +135,7 @@ class CircadianDaemon:
     _security_rids: dict[str, str]
     _security_light_rids: tuple[str, ...]
     _rhythm_motion_rooms: dict[str, str]
+    _night_guide_motion_rids: set[str]
 
     def __init__(
         self,
@@ -189,6 +202,16 @@ class CircadianDaemon:
             self._rebuild_security_controller()
             self._security_sse_on_rid = self._resolve_resume_trigger(state, sec.sse_on)
             self._security_sse_off_rid = self._resolve_resume_trigger(state, sec.sse_off)
+        if spec.night_guide is not None:
+            area = next(
+                (a for a in state.motion_areas if a.name == spec.night_guide.area), None
+            )
+            if area is None:
+                raise ConfigError(
+                    f"circadian_daemon.night_guide.area {spec.night_guide.area!r} not found "
+                    "on the bridge — run `hueman inventory` to list MotionAware areas"
+                )
+            self._night_guide_motion_rids = set(area.service_rids)
         if config.rhythm is not None:
             self._rhythm_motion_rooms = {
                 srid: (area.room_name or area.name)
@@ -300,6 +323,19 @@ class CircadianDaemon:
         self._security_rids = {}                      # group name -> grouped_light rid
         self._security_light_rids = ()                # member lights (chaos units)
         self._security_thread: threading.Thread | None = None
+        # --- night-guide: motion-triggered path lighting (optional) ---
+        self._night_guide: NightGuideSpec | None = spec.night_guide
+        self._night_guide_controller = (
+            NightGuideController(spec.night_guide.timeout_ms)
+            if spec.night_guide is not None else None
+        )
+        self._night_guide_motion_rids = set()   # resolved in __init__ (needs BridgeState)
+        # Raw grouped_light body captured just before the guide look overwrites
+        # a real manual override, so the hand-back can restore it verbatim
+        # instead of guessing. None whenever there is nothing to restore (the
+        # guide engaged over ordinary circadian/night_look, which is always
+        # recomputable instead).
+        self._night_guide_snapshot: dict[str, Any] | None = None
         # --- rhythm engine (optional, observe stage only) ---
         self._rhythm: RhythmSpec | None = config.rhythm
         self._presence: PresenceTracker | None = None
@@ -587,6 +623,8 @@ class CircadianDaemon:
             self._poll_control_file(now)
             if self._bias is not None:
                 self._apply_bias(now)
+            if self._night_guide is not None:
+                self._night_guide_tick_locked(now)
             if self._rhythm is not None:
                 try:
                     self._rhythm_tick(now)
@@ -702,6 +740,119 @@ class CircadianDaemon:
             # ignored forever. Docker --restart always then surfaces it to the operator.
             _LOG.warning("write to %s failed (%s); skipping", self._rid, e)
             return False
+
+    def _rest_target(self) -> TargetState:
+        """The driven zone's resting target when circadian isn't actively driving it.
+
+        The configured ``night_look`` if set (a static hold, e.g. minimum-
+        brightness red), otherwise plain off — the same choice
+        :meth:`_tick_once`'s ``FadeOff`` handling makes at the hand-off edge.
+        Reused by the night-guide hand-back, which needs the identical
+        "what should this zone show right now" answer on demand, not just at
+        the one hand-off edge.
+        """
+        look = self._spec.night_look
+        if look is not None:
+            return TargetState(
+                on=True, brightness=look.brightness,
+                mirek=(look.color.mirek if look.color else None),
+                hex=(look.color.hex if look.color else None),
+            )
+        return TargetState.off()
+
+    # -- night-guide: motion-triggered path lighting ------------------------ #
+    def _night_guide_on_motion_locked(self, now: float) -> None:
+        """Handle a motion event for the night-guide feature (caller holds the lock).
+
+        Only engages while circadian isn't actively driving the zone
+        (``not in_window``) — a guide light has no business fighting the day
+        curve, per the feature's whole point (path lighting for when the zone
+        is otherwise parked/off). On the IDLE -> GUIDING edge: if a real
+        manual override is currently showing (``SUSPENDED``), snapshot the
+        zone's actual bridge state first — there is nothing to recompute a
+        manual look from, so it has to be remembered — then write the guide
+        look. ``_cmd_*`` are updated exactly like any other daemon write so
+        settle-and-compare reads the guide light's own settling as "self",
+        not a fresh human override.
+        """
+        assert self._night_guide is not None and self._night_guide_controller is not None
+        if self._controller.in_window(now):
+            return  # circadian owns the zone; stay out of its way
+        entering = self._night_guide_controller.motion(now)
+        if not entering:
+            return  # already guiding; the timeout just got pushed out, nothing to write
+        if self._controller.mode == CircadianController.SUSPENDED:
+            self._night_guide_snapshot = self._client.get_resource("grouped_light", self._rid)
+        look = self._night_guide.look
+        _LOG.info("night-guide: motion -> soft-red guide on")
+        target = TargetState(
+            on=True, brightness=look.brightness,
+            mirek=(look.color.mirek if look.color else None),
+            hex=(look.color.hex if look.color else None),
+        )
+        if self._write(target, self._night_guide.transition_ms):
+            self._cmd_on = True
+            self._cmd_brightness = look.brightness
+            self._cmd_fade_until = now + self._night_guide.transition_ms / 1000.0
+
+    def _night_guide_tick_locked(self, now: float) -> None:
+        """Advance the guide timeout; caller (``_tick_once``) holds the lock."""
+        assert self._night_guide_controller is not None
+        if self._night_guide_controller.tick(now):
+            self._night_guide_restore_locked(now)
+
+    def _night_guide_restore_locked(self, now: float) -> None:
+        """Hand the zone back once a guide episode ends (caller holds the lock).
+
+        A snapshot means a real manual override was showing before the guide
+        look overwrote it: restore it verbatim (a manual look isn't derivable
+        from anything else). No snapshot means ordinary circadian/night_look
+        was showing: recompute the current authoritative target fresh — the
+        curve if the window opened back up during the episode, otherwise the
+        normal resting state — the same recompute-when-possible split
+        :meth:`_restore_after_security` uses. Hold alone would leave the guide
+        look showing forever: it assumes nothing changed underneath it, which
+        is false here — the guide write is exactly what changed it.
+        """
+        if self._night_guide_snapshot is not None:
+            body = self._night_guide_snapshot
+            self._night_guide_snapshot = None
+            put_body = {
+                "on": body.get("on", {"on": True}),
+                "dimming": body.get("dimming", {}),
+                "color_temperature": body.get("color_temperature", {}),
+                "color": body.get("color", {}),
+                "dynamics": {"duration": self._night_guide_transition_ms()},
+            }
+            try:
+                self._client.update_resource("grouped_light", self._rid, put_body)
+            except BridgeError as e:
+                _LOG.warning("night-guide restore write failed (%s); skipping", e)
+                return
+            _LOG.info("night-guide: timeout -> restoring the snapshotted manual look")
+            self._cmd_on = bool(body.get("on", {}).get("on", True))
+            dimming = body.get("dimming", {})
+            if "brightness" in dimming:
+                self._cmd_brightness = dimming["brightness"]
+            self._cmd_fade_until = now + self._night_guide_transition_ms() / 1000.0
+            return
+        _LOG.info("night-guide: timeout -> handing back to circadian")
+        if self._controller.in_window(now):
+            action = self._controller.drive_to(now)
+            target = TargetState(on=True, brightness=action.brightness, mirek=action.mirek, hex=None)
+            transition_ms = action.transition_ms
+        else:
+            target = self._rest_target()
+            transition_ms = self._night_guide_transition_ms()
+        if self._write(target, transition_ms):
+            self._cmd_on = target.on
+            self._cmd_brightness = target.brightness if target.on else 0.0
+            self._cmd_fade_until = now + transition_ms / 1000.0
+
+    def _night_guide_transition_ms(self) -> int:
+        """The guide's configured edge fade, for its own hand-back writes."""
+        assert self._night_guide is not None
+        return self._night_guide.transition_ms
 
     def _resume_locked(self, now: float) -> None:
         """Resume driving and grant a settle-classification grace window.
@@ -1235,14 +1386,24 @@ class CircadianDaemon:
                     _LOG.info("resume trigger %s -> resumed", event.rid)
                     self._resume_locked(now)
                 return
-            if (self._presence is not None
-                    and event.rtype in ("convenience_area_motion", "security_area_motion")):
-                room = self._rhythm_motion_rooms.get(event.rid)
-                if room is not None and event.data.get("motion", {}).get("motion"):
-                    judgment = self._presence.feed(
-                        ActivityEvent(room=room, kind="motion", ts=now))
-                    _LOG.debug("rhythm: motion in %r -> human=%s (%s)",
-                               room, judgment.human, judgment.rule)
+            if event.rtype in ("convenience_area_motion", "security_area_motion"):
+                # Two independent consumers of the same MotionAware event: rhythm
+                # (observe-only, feeds presence inference) and night-guide (acts —
+                # see module docstring). Neither requires the other to be configured.
+                has_motion = bool(event.data.get("motion", {}).get("motion"))
+                if self._presence is not None:
+                    room = self._rhythm_motion_rooms.get(event.rid)
+                    if room is not None and has_motion:
+                        judgment = self._presence.feed(
+                            ActivityEvent(room=room, kind="motion", ts=now))
+                        _LOG.debug("rhythm: motion in %r -> human=%s (%s)",
+                                   room, judgment.human, judgment.rule)
+                if (
+                    self._night_guide is not None
+                    and has_motion
+                    and event.rid in self._night_guide_motion_rids
+                ):
+                    self._night_guide_on_motion_locked(now)
                 return
             if event.rtype != "grouped_light" or event.rid != self._rid:
                 return
