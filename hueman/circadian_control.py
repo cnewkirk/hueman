@@ -154,9 +154,11 @@ class CircadianController:
     def tick(self, now: float) -> DriveTo | FadeOff | Hold:
         """Advance the state machine one tick and return the action for ``now``.
 
-        ``SUSPENDED`` holds until an explicit resume, except that a window *open*
-        edge with ``daily_safety_resume`` re-arms driving (so an overnight
-        override never silently disables the daemon forever). ``NIGHT_IDLE``
+        ``SUSPENDED`` holds until an explicit resume — a manual override owns
+        the zone until the human hands it back. The opt-in
+        ``daily_safety_resume`` re-arms driving at the window-*open* edge
+        instead (for deployments that prefer the daemon never staying disabled
+        past a morning); it is off by default. ``NIGHT_IDLE``
         flips to ``DRIVING`` when the window is active. While driving, an
         in-window tick returns the curve sample; the window-*close* edge
         returns a single ``FadeOff`` and drops to ``NIGHT_IDLE``. Driving

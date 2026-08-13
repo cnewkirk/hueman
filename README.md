@@ -321,8 +321,15 @@ log at INFO; individual per-event motion judgments appear at DEBUG; quiet
   `watch --dry-run` logs intended commands without sending them.
 - The daemon runs in the foreground; pair it with Docker (`--restart always`),
   `systemd`, or similar — see `deploy/README.md`. On a manual override it
-  suspends until a power-cycle of
-  the zone, `hueman circadian resume`, or the daily safety resume.
+  suspends until an explicit hand-back: a power-cycle of the zone,
+  `hueman circadian resume`, or a daemon restart. That includes the zone being
+  turned on overnight (a manual night look survives the next window open), and
+  each viewing (bias) light individually — a manually adjusted bias light is
+  frozen until it is toggled off->on or the daemon resumes. The window-open
+  auto-retake is opt-in via `manual_override.daily_safety_resume: true`
+  (off by default). Known gaps: a colour-only change (same brightness) is not
+  detected, and a single light changed *inside* the driven zone may hide in the
+  zone's aggregate brightness.
 - Security mode's chaos runs over the REST API, which rate-limits under load —
   the show degrades gracefully (the daemon logs drop stats). True per-frame
   control would need the Entertainment streaming API.

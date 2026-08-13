@@ -23,9 +23,19 @@ mid-fade. A brightness that is still *moving* is therefore presumed to be a fade
 *held* (within ``settle_epsilon``) for ``settle_window_ms`` is it compared to the
 daemon's last commanded target: settled within ``override_band`` of target is our
 own look (no-op); settled beyond the band, or the zone turned off while we expect
-it on, is a human override and the controller suspends. A power cycle
-(off->on while suspended) re-engages the daemon when ``resume_on_power_cycle`` is
-set.
+it on, is a human override and the controller suspends. So is the zone being
+turned *on* while the daemon had parked it off overnight — a manual night look
+must survive the next window open, not get stomped by it. A suspension holds
+until an EXPLICIT hand-back: a power cycle (off->on while suspended, when
+``resume_on_power_cycle`` is set), the resume trigger/control file, or a daemon
+restart. The window-open auto-resume (``daily_safety_resume``) is opt-in and
+off by default.
+
+The viewing (bias) lights get the same contract per light: each bias light's
+own ``light`` events run a per-light settle-and-compare against its last
+commanded target, and a detected manual change (dim, off, or on-while-parked)
+freezes that one light — ``_apply_bias`` skips it — until that light is toggled
+off->on or an explicit resume releases the whole set.
 
 Classification is not left to the event stream alone — that would race the tick.
 The tick judges any settled-but-unjudged value itself (once its own last fade has
@@ -309,6 +319,17 @@ class CircadianDaemon:
         # redundant per-tick off re-PUTs (7 writes/min overnight, observed to
         # contribute to bridge 'command queue is full' rejections).
         self._bias_off_written: set[str] = set()
+        # --- per-light manual-override freeze (bias set) ---
+        # The bias set is driven per light, so overrides are honoured per
+        # light: a viewing light a human adjusted is FROZEN (skipped by
+        # _apply_bias) until that light's own off->on power-cycle or an
+        # explicit resume. Same settle-and-compare knobs as the zone, applied
+        # to each bias light's own ``light`` events.
+        self._bias_cmd: dict[str, tuple[bool, float]] = {}        # rid -> last commanded (on, brightness)
+        self._bias_cmd_fade_until: dict[str, float] = {}          # rid -> when our own fade lands (epoch)
+        self._bias_obs: dict[str, tuple[float, float, bool]] = {} # rid -> (brightness, since, classified)
+        self._bias_overridden: set[str] = set()                   # rids frozen by a manual change
+        self._bias_last_on: dict[str, bool] = {}                  # rid -> last observed on-state
         # --- security mode (optional, top priority) ---
         self._security = config.security
         self._security_controller = (
@@ -650,6 +671,11 @@ class CircadianDaemon:
         seen live 2026-07-25 when a housekeeper unplugged a bias light). Non-edge
         ``BiasOff`` writes are suppressed once the off has landed — re-PUTing off
         to the whole viewing set every tick, all night, is pure queue pressure.
+
+        Lights under a per-light manual-override freeze (``_bias_overridden``)
+        are skipped entirely, and a light sitting on an unjudged value far from
+        its target is deferred rather than written over — the per-light twin of
+        the zone tick's defer-then-classify (see the module docstring).
         """
         bias = self._bias
         if bias is None:
@@ -677,6 +703,32 @@ class CircadianDaemon:
             rid = self._bias_rids.get(action.light)
             if rid is None:
                 continue  # name not resolved to a bridge light (e.g. for_test)
+            # Judge any settled-but-unjudged value for this light first, so a
+            # manual change freezes it even if the bridge never re-emits.
+            self._bias_classify_locked(rid, now)
+            if rid in self._bias_overridden:
+                continue  # a manual change owns this light until off->on or resume
+            intended = (
+                action.look.brightness if isinstance(action, BiasHold)
+                else action.brightness if isinstance(action, BiasDrive)
+                else None
+            )
+            obs = self._bias_obs.get(rid)
+            if (
+                intended is not None
+                and obs is not None
+                and not obs[2]
+                and abs(obs[0] - intended) > self._override_band
+            ):
+                # The light sits far from target on a value nobody has judged
+                # yet (likely a human mid-adjustment). Never write over it;
+                # skipping leaves _bias_cmd_fade_until untouched so the
+                # judgment above can run once the value has held.
+                _LOG.info(
+                    "bias: deferring write to %s at %.1f%% (target %.1f%%) not yet judged",
+                    rid, obs[0], intended,
+                )
+                continue
             if isinstance(action, BiasHold):
                 look = action.look
                 target = TargetState(
@@ -684,17 +736,17 @@ class CircadianDaemon:
                     mirek=(look.color.mirek if look.color else None),
                     hex=(look.color.hex if look.color else None),
                 )
-                result = self._write_light(rid, target, action.transition_ms)
+                result = self._write_light(rid, target, action.transition_ms, now)
                 self._bias_off_written.discard(rid)
             elif isinstance(action, BiasDrive):
                 result = self._write_light(
                     rid, TargetState(on=True, brightness=action.brightness,
-                                     mirek=action.mirek, hex=None), action.transition_ms)
+                                     mirek=action.mirek, hex=None), action.transition_ms, now)
                 self._bias_off_written.discard(rid)
             else:  # BiasOff
                 if rid in self._bias_off_written:
                     continue  # already off; nothing to re-write until an edge
-                result = self._write_light(rid, TargetState.off(), action.transition_ms)
+                result = self._write_light(rid, TargetState.off(), action.transition_ms, now)
                 if result is _BiasWrite.OK:
                     self._bias_off_written.add(rid)
             if result is _BiasWrite.FAILED:
@@ -704,7 +756,9 @@ class CircadianDaemon:
             # bulb must not perpetually re-arm the edge (see the docstring).
             self._bias_last_applied_on = tv_on
 
-    def _write_light(self, rid: str, target: TargetState, transition_ms: int) -> _BiasWrite:
+    def _write_light(
+        self, rid: str, target: TargetState, transition_ms: int, now: float
+    ) -> _BiasWrite:
         """PUT a single ``light`` body; a failure is logged and classified.
 
         Returns :class:`_BiasWrite` so :meth:`_apply_bias` can tell three cases
@@ -712,14 +766,98 @@ class CircadianDaemon:
         (``FAILED``, e.g. 'command queue is full'), and an *unreachable* device
         (``UNREACHABLE``, a bulb that is unplugged/off-at-the-wall) which must
         not stall the edge latch — the bridge will report it every tick forever.
+
+        An accepted write latches this light's commanded target (the per-light
+        twin of the zone's ``_cmd_*``), so the per-light settle-and-compare can
+        tell our own fades from a human adjustment.
         """
         body = LightCommand.build(target, transition_ms)
         try:
             self._client.update_resource("light", rid, body)
+            self._bias_cmd[rid] = (
+                target.on, target.brightness if (target.on and target.brightness is not None) else 0.0
+            )
+            self._bias_cmd_fade_until[rid] = now + transition_ms / 1000.0
             return _BiasWrite.OK
         except BridgeError as e:
             _LOG.warning("bias write to %s failed (%s); skipping", rid, e)
             return _BiasWrite.UNREACHABLE if e.unreachable else _BiasWrite.FAILED
+
+    def _bias_freeze_locked(self, rid: str, now: float, cause: str) -> None:
+        """Freeze one viewing light under a detected manual override."""
+        _LOG.info(
+            "bias light %s manual override (%s) -> frozen until off->on or resume",
+            rid, cause,
+        )
+        self._bias_overridden.add(rid)
+        self._rhythm_note_manual(now)
+
+    def _bias_classify_locked(self, rid: str, now: float) -> None:
+        """Judge one bias light's settled-but-unjudged brightness. Caller holds the lock.
+
+        The per-light twin of :meth:`_classify_settled_locked`: a no-op unless
+        the observed value has held for ``settle_window`` and our own last
+        commanded fade (plus a settle window) has landed. Settled beyond
+        ``override_band`` of the light's commanded brightness is a human
+        adjustment -> freeze that light; within the band it is our own look.
+        """
+        obs = self._bias_obs.get(rid)
+        if obs is None or obs[2]:
+            return
+        bri, since, _ = obs
+        if now - since < self._settle_window_s:
+            return  # not stable long enough yet
+        cmd = self._bias_cmd.get(rid)
+        if cmd is None:
+            return  # never commanded this light; nothing to compare against
+        if now < self._bias_cmd_fade_until.get(rid, 0.0) + self._settle_window_s:
+            return  # our own fade may still be landing; a mid-fade sample must not judge
+        self._bias_obs[rid] = (bri, since, True)
+        cmd_on, cmd_bri = cmd
+        if cmd_on and abs(bri - cmd_bri) > self._override_band and rid not in self._bias_overridden:
+            self._bias_freeze_locked(
+                rid, now, f"settled at {bri:.1f}% vs target {cmd_bri:.1f}%")
+
+    def _bias_light_event_locked(self, event: "BridgeEvent", now: float) -> None:
+        """Route one viewing light's own ``light`` event. Caller holds the lock.
+
+        * ``on:false`` while we commanded the light *on* -> a human turned it
+          off -> freeze it (its off is theirs to keep).
+        * ``on:true`` after an observed off while frozen -> the power-cycle
+          rejoin gesture -> unfreeze and re-drive it immediately.
+        * ``on:true`` while we had commanded it *off* -> a human turned it on
+          -> freeze it (the on look is theirs).
+        * A brightness is settle-tracked and judged by
+          :meth:`_bias_classify_locked`, exactly like the zone.
+        """
+        rid = event.rid
+        on_state = event.data.get("on", {}).get("on")
+        bri = event.data.get("dimming", {}).get("brightness")
+        cmd = self._bias_cmd.get(rid)
+        if on_state is not None:
+            if on_state is False:
+                if cmd is not None and cmd[0] and rid not in self._bias_overridden:
+                    self._bias_freeze_locked(rid, now, "turned off")
+                self._bias_last_on[rid] = False
+            else:
+                was_off = self._bias_last_on.get(rid) is False
+                self._bias_last_on[rid] = True
+                if rid in self._bias_overridden and was_off:
+                    _LOG.info("bias light %s power-cycle (off->on) -> rejoining", rid)
+                    self._bias_overridden.discard(rid)
+                    self._bias_obs.pop(rid, None)
+                    self._bias_off_written.discard(rid)
+                    self._apply_bias(now)  # rejoin now, not up to one tick later
+                    return
+                if cmd is not None and not cmd[0] and rid not in self._bias_overridden:
+                    self._bias_freeze_locked(rid, now, "turned on")
+        if bri is None or on_state is False:
+            return
+        obs = self._bias_obs.get(rid)
+        if obs is None or abs(bri - obs[0]) > self._settle_epsilon:
+            self._bias_obs[rid] = (bri, now, False)  # moving -> restart the settle window
+            return
+        self._bias_classify_locked(rid, now)
 
     def _write(self, target: TargetState, transition_ms: int) -> bool:
         """Serialise ``target`` and PUT it.
@@ -905,6 +1043,17 @@ class CircadianDaemon:
         self._classify_grace_until = now + (
             self._spec.transition_ms + self._spec.settle_window_ms) / 1000.0
         self._drive_or_rest_locked(now, self._spec.fade_off_ms)
+        if self._bias_overridden:
+            # An explicit resume hands the WHOLE home back to circadian, the
+            # frozen viewing lights included; force an edge re-assert so they
+            # visibly rejoin now rather than on the next tick.
+            _LOG.info(
+                "resume: releasing %d frozen bias light(s)", len(self._bias_overridden))
+            self._bias_overridden.clear()
+            self._bias_obs.clear()
+            self._bias_off_written.clear()
+            self._bias_last_applied_on = None
+            self._apply_bias(now)
 
     def _poll_control_file(self, now: float) -> None:
         """Resume the daemon if the external control file is present, then remove it.
@@ -1156,6 +1305,10 @@ class CircadianDaemon:
         with self._lock:
             self._bias_off_written.clear()
             self._bias_last_applied_on = None        # next apply is a forced edge
+            # Chaos stomped every light, the frozen ones included — a bias
+            # light left frozen here would hold its last chaos colour forever.
+            self._bias_overridden.clear()
+            self._bias_obs.clear()
             # The restore drive below is a big catch-up ramp from wherever chaos
             # left the zone. A slow segment of that ramp can hold within
             # settle_epsilon across the settle window and read as a human
@@ -1373,12 +1526,18 @@ class CircadianDaemon:
         Decision contract (settle-and-compare; see the module docstring):
 
         * ``scene``/``button`` matching the resolved resume trigger -> resume.
+        * ``light`` events for a viewing (bias) light get per-light
+          settle-and-compare (:meth:`_bias_light_event_locked`): a manual
+          change freezes THAT light until its own off->on or a resume.
         * Otherwise only this zone's ``grouped_light`` events matter.
         * ``on:false`` while the daemon expects the zone *on* (``_cmd_on``) -> a
           human turned it off -> suspend. ``on:false`` after our own fade-off
           (``_cmd_on`` already False) is ours and ignored.
         * ``on:true`` after an observed ``on:false`` while *suspended* re-engages
           the daemon when ``resume_on_power_cycle`` is set (a power cycle).
+        * ``on:true`` while the daemon had parked the zone off (night idle,
+          ``_cmd_on`` False) -> a manual night look -> suspend, so the next
+          window open cannot silently stomp it.
         * A ``dimming`` brightness is judged only once it has *held* (within
           ``settle_epsilon``) for ``settle_window``: a value still moving is a
           fade and is not classified; a settled value beyond ``override_band`` of
@@ -1427,6 +1586,10 @@ class CircadianDaemon:
                 ):
                     self._night_guide_on_motion_locked(now)
                 return
+            if event.rtype == "light":
+                if self._bias is not None and event.rid in self._bias_rids.values():
+                    self._bias_light_event_locked(event, now)
+                return
             if event.rtype != "grouped_light" or event.rid != self._rid:
                 return
             on_state = event.data.get("on", {}).get("on")
@@ -1450,6 +1613,19 @@ class CircadianDaemon:
                     ):
                         _LOG.info("power-cycle (off->on) -> resumed")
                         self._resume_locked(now)
+                    elif (
+                        not self._cmd_on
+                        and self._controller.mode == CircadianController.NIGHT_IDLE
+                    ):
+                        # A human turned the zone on while we had parked it
+                        # off: a manual night look. Without latching SUSPENDED
+                        # here, the next window open flips NIGHT_IDLE ->
+                        # DRIVING and stomps it — the overnight half of "a
+                        # manual change holds until an explicit action".
+                        _LOG.info(
+                            "zone turned on while parked off -> suspended (manual night look)")
+                        self._controller.on_external_change(now)
+                        self._rhythm_note_manual(now)
                     self._last_on = True
 
             # -- brightness settle-and-compare ----------------------------- #

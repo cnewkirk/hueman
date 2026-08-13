@@ -228,7 +228,9 @@ def test_circadian_daemon_defaults():
     assert d.resume_on_power_cycle is True
     assert d.resume_trigger is None
     assert d.control_file == ".hue-circadian-resume"
-    assert d.daily_safety_resume is True
+    # off by default: a manual override holds until an explicit action
+    # (power-cycle / resume trigger / restart), never a silent morning retake
+    assert d.daily_safety_resume is False
     assert d.brightness_floor is None and d.brightness_ceiling is None
     assert d.retry_on_error_ms == 30_000
     assert d.sse_backoff_max_ms == 60_000
