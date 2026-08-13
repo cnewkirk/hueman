@@ -65,7 +65,17 @@ reverts nor recreates it.
 **Mode 1 — the circadian daemon** (`hueman circadian run`, typically a Docker
 container near the bridge): re-samples the solar curve every 60 s and drives one
 grouped_light zone with long cross-fades from sunrise to `hand_off`, detects
-manual overrides by settle-and-compare, and owns the TV-bias hold. Night
+manual overrides by settle-and-compare, and owns the TV-bias hold.
+**Manual-override contract (2026-08-12):** a manual change owns the lights
+until an *explicit* hand-back — zone off→on power-cycle, `hueman circadian
+resume`/resume trigger, or a daemon restart. That includes a zone turned on
+overnight (latched `SUSPENDED`, so window open never stomps a manual night
+look) and each bias light individually (per-light settle-and-compare on its
+own `light` events; a frozen light is skipped by `_apply_bias` until its own
+off→on or a resume). `daily_safety_resume` (the morning auto-retake) is now
+opt-in, default false. Known gaps: colour-only changes are invisible to the
+brightness-only compare, and a single light changed inside the driven zone can
+hide in the grouped aggregate. Night
 guidance stays native on the bridge (`night_motion:` → a MotionAware
 `behavior_instance`), provisioned by `apply`.
 
@@ -135,6 +145,12 @@ How it works (config: `circadian_daemon.bias`):
 - **No bias light may sit in the daemon's driven zone** or the 60 s
   grouped_light tick stomps its held look. Keep the driven zone and the bias
   set disjoint.
+- **Per-light manual-override freeze (2026-08-12):** each bias light's own
+  `light` SSE events run the same settle-and-compare as the zone; a manual
+  dim/off/on-while-parked freezes that one light (skipped by every apply,
+  including TV edges) until that light is toggled off→on or an explicit
+  resume releases the set. Unjudged far-from-target values are deferred, never
+  written over.
 - **Pluggable on/off triggers** (`bias.triggers`, OR-combined, all optional):
   `probe` (the daemon TCP/ICMP-pings the TV itself — note some TVs hold their
   webOS port open in standby, defeating port probes), `control_file` (something

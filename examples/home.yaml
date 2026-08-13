@@ -83,11 +83,14 @@ circadian_daemon:
   interval: 60s                      # curve tick cadence
   transition: 75s                    # steady-state cross-fade (> interval = seamless)
   fade_off: 90s                      # the hand-off fade to dark
+  # A manual change owns the lights until an EXPLICIT hand-back: toggling the
+  # zone off->on, `hueman circadian resume`, or a daemon restart. Set
+  # daily_safety_resume: true to opt back into the old morning auto-retake.
   manual_override:
     detect: true
     control_file: .hue-circadian-resume   # `hueman circadian resume` touches this
     resume_on_power_cycle: true
-    daily_safety_resume: true
+    daily_safety_resume: false
   # TV-aware bias hold: while the TV is on, each light below holds its `look`;
   # when it turns off, `idle: circadian` lights rejoin the room's curve (or
   # `idle: "off"` lights go dark). TV on/off flips use the short `transition`

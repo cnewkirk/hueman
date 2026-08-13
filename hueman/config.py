@@ -952,7 +952,10 @@ class CircadianDaemonSpec:
             resume_on_power_cycle=bool(mo.get("resume_on_power_cycle", True)),
             resume_trigger=None if mo.get("resume_trigger") is None else str(mo["resume_trigger"]),
             control_file=str(mo.get("control_file", ".hue-circadian-resume")),
-            daily_safety_resume=bool(mo.get("daily_safety_resume", True)),
+            # Off by default: a manual override holds until an EXPLICIT action
+            # (zone off->on, resume trigger/control file, daemon restart) — the
+            # next window open must not silently retake manually-set lights.
+            daily_safety_resume=bool(mo.get("daily_safety_resume", False)),
             brightness_floor=None if floor is None else float(floor),
             brightness_ceiling=None if ceil is None else float(ceil),
             retry_on_error_ms=parse_duration(retry.get("on_error", "30s"), ctx=f"{ctx}.retry.on_error"),

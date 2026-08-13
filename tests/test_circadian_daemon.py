@@ -450,6 +450,48 @@ def test_suspended_override_survives_hand_off():
     assert len(daemon._client.writes) == n
 
 
+def test_manual_on_while_parked_off_suspends_and_survives_window_open():
+    # THE CONTRACT: a manual change owns the lights until an EXPLICIT action.
+    # Turning the zone on at night (after our own fade-off) is a manual night
+    # look; without latching SUSPENDED, the next window open would flip
+    # NIGHT_IDLE -> DRIVING and silently stomp it come morning.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    daemon._tick_once(_epoch(22, 0))       # in window -> driving
+    daemon._tick_once(_epoch(23, 0))       # past hand-off -> FadeOff, cmd_on False
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}),
+                         _epoch(23, 1))    # our own fade-off event: ignored
+    assert daemon._controller.mode == "night_idle"
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}),
+                         _epoch(23, 30))   # a human turned the zone on
+    assert daemon._controller.mode == "suspended"
+    n = len(daemon._client.writes)
+    daemon._tick_once(_epoch(12, 0, day=_dt.date(2026, 6, 29)))  # next-day window open
+    assert daemon._controller.mode == "suspended"   # no silent morning retake
+    assert len(daemon._client.writes) == n
+    # the explicit hand-back still works: zone off->on power-cycles a resume.
+    t = _epoch(12, 30, day=_dt.date(2026, 6, 29))
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": False}}), t)
+    daemon._handle_event(BridgeEvent("grouped_light", "GL", {"on": {"on": True}}), t + 1)
+    assert daemon._controller.mode == "driving"
+    assert len(daemon._client.writes) > n           # resume re-drove the zone
+
+
+def test_in_window_override_holds_past_next_window_open_by_default():
+    # daily_safety_resume now defaults OFF: a daytime override survives the
+    # hand-off AND the next morning's window-open edge, until an explicit resume.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    daemon._handle_event(_dim(30.0), t0 + 30)       # manual dim, far from target
+    daemon._handle_event(_dim(30.0), t0 + 45)       # held >= settle_window
+    assert daemon._controller.mode == "suspended"
+    n = len(daemon._client.writes)
+    daemon._tick_once(_epoch(23, 0))                # window close while suspended: Hold
+    daemon._tick_once(_epoch(12, 0, day=_dt.date(2026, 6, 29)))  # window-OPEN edge
+    assert daemon._controller.mode == "suspended"
+    assert len(daemon._client.writes) == n
+
+
 # -- resume_trigger --------------------------------------------------------- #
 def test_resume_trigger_scene_event_resumes():
     # A scene whose rid matches the resolved resume trigger re-engages the daemon.
@@ -823,6 +865,90 @@ def test_bias_idle_unaffected_by_main_zone_override():
     lw = _light_writes(d)
     assert lw["Lcouch"]["on"] == {"on": True}      # viewing light still drives the curve
     assert not any(rt == "grouped_light" for (rt, _r, _b) in d._client.writes)  # main held
+
+
+# -- TV bias hold: per-light manual-override freeze -------------------------- #
+def _light_ev(rid, **data):
+    return BridgeEvent("light", rid, data)
+
+
+def test_bias_light_manual_dim_defers_then_freezes_that_light():
+    # THE CONTRACT, per light: a human dims one viewing light; the daemon must
+    # first DEFER (never write over an unjudged value), then freeze that one
+    # light once the value settles — while the rest of the set keeps driving.
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._bias_aggregator.on(t)                       # TV on -> hold looks
+    d._tick_once(t)                                # edge apply; cmd latched (Couch 5%)
+    d._handle_event(_light_ev("Lcouch", dimming={"brightness": 60.0}), t + 10)
+    d._client.writes.clear()
+    d._tick_once(t + 11)                           # value not yet settled -> defer
+    lw = _light_writes(d)
+    assert "Lcouch" not in lw                      # not written over mid-adjustment
+    assert "Lplay" in lw                           # the other light still held
+    d._handle_event(_light_ev("Lcouch", dimming={"brightness": 60.0}), t + 14)
+    assert "Lcouch" in d._bias_overridden          # settled far from 5% -> frozen
+    d._client.writes.clear()
+    d._tick_once(t + 60)
+    assert "Lcouch" not in _light_writes(d)        # frozen: skipped every tick
+
+
+def test_bias_light_manual_off_freezes_it():
+    # Turning a commanded-on viewing light OFF is a manual override too — the
+    # daemon must not relight it on the next tick.
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._bias_aggregator.on(t)
+    d._tick_once(t)
+    d._handle_event(_light_ev("Lcouch", on={"on": False}), t + 10)
+    assert "Lcouch" in d._bias_overridden
+    d._client.writes.clear()
+    d._tick_once(t + 60)
+    assert "Lcouch" not in _light_writes(d)
+
+
+def test_bias_light_manual_on_while_parked_off_freezes():
+    # Out of window, TV off: the set is parked off. A human turning a viewing
+    # light ON owns that light — the daemon must not fade it back off.
+    d = _bias_daemon()
+    t = _epoch(23, 30)                             # past hand-off, TV off -> offs written
+    d._tick_once(t)
+    d._handle_event(_light_ev("Lplay", on={"on": True}), t + 60)
+    assert "Lplay" in d._bias_overridden
+    d._client.writes.clear()
+    d._tick_once(t + 120)
+    assert "Lplay" not in _light_writes(d)
+
+
+def test_bias_light_power_cycle_rejoins_immediately():
+    # The explicit per-light hand-back: toggling the frozen light off->on
+    # releases it and re-drives it on the event itself, not next tick.
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._bias_aggregator.on(t)
+    d._tick_once(t)
+    d._handle_event(_light_ev("Lcouch", on={"on": False}), t + 10)   # freeze (manual off)
+    assert "Lcouch" in d._bias_overridden
+    d._client.writes.clear()
+    d._handle_event(_light_ev("Lcouch", on={"on": True}), t + 20)    # off->on rejoin
+    assert "Lcouch" not in d._bias_overridden
+    lw = _light_writes(d)
+    assert lw["Lcouch"]["dimming"] == {"brightness": 5.0}            # hold look re-driven
+
+
+def test_resume_releases_frozen_bias_lights():
+    # "Circadian mode toggled" (resume trigger / control file / power-cycle)
+    # hands the WHOLE home back: frozen viewing lights rejoin on the resume.
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._bias_aggregator.on(t)
+    d._tick_once(t)
+    d._handle_event(_light_ev("Lcouch", on={"on": False}), t + 10)
+    assert "Lcouch" in d._bias_overridden
+    d._client.writes.clear()
+    d._resume_locked(t + 60)
+    assert not d._bias_overridden
+    assert "Lcouch" in _light_writes(d)            # edge re-assert rejoined it
 
 
 # -- TV bias hold: probe edge applies immediately (low-latency) -------------- #
