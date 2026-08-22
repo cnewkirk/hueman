@@ -800,14 +800,24 @@ class CircadianDaemon:
         commanded fade (plus a settle window) has landed. Settled beyond
         ``override_band`` of the light's commanded brightness is a human
         adjustment -> freeze that light; within the band it is our own look.
+
+        Fast path: a value already within ``override_band`` of the commanded
+        brightness classifies as "self" immediately, with no settle or fade
+        wait — its eventual verdict can only ever be "self", and waiting
+        starves judgment while the TV is on (per-tick hold writes keep pushing
+        ``_bias_cmd_fade_until`` forward), which made the next TV-off edge
+        defer for minutes (live, 2026-08-22 play bars).
         """
         obs = self._bias_obs.get(rid)
         if obs is None or obs[2]:
             return
         bri, since, _ = obs
+        cmd = self._bias_cmd.get(rid)
+        if cmd is not None and cmd[0] and abs(bri - cmd[1]) <= self._override_band:
+            self._bias_obs[rid] = (bri, since, True)  # matches our command -> self, no wait
+            return
         if now - since < self._settle_window_s:
             return  # not stable long enough yet
-        cmd = self._bias_cmd.get(rid)
         if cmd is None:
             return  # never commanded this light; nothing to compare against
         if now < self._bias_cmd_fade_until.get(rid, 0.0) + self._settle_window_s:
@@ -856,6 +866,7 @@ class CircadianDaemon:
         obs = self._bias_obs.get(rid)
         if obs is None or abs(bri - obs[0]) > self._settle_epsilon:
             self._bias_obs[rid] = (bri, now, False)  # moving -> restart the settle window
+            self._bias_classify_locked(rid, now)     # fast path may classify a command echo now
             return
         self._bias_classify_locked(rid, now)
 
@@ -1633,10 +1644,14 @@ class CircadianDaemon:
             if bri is None or on_state is False:
                 return
             if self._obs_brightness is None or abs(bri - self._obs_brightness) > self._settle_epsilon:
-                # value moved (still fading) -> reset the settle window, do NOT classify.
+                # value moved (still fading) -> reset the settle window. The
+                # classify call below can only take its matches-command fast
+                # path (a command echo classifies as "self" instantly); a value
+                # far from command fails the settle check and stays unjudged.
                 self._obs_brightness = bri
                 self._obs_since = now
                 self._obs_classified = False
+                self._classify_settled_locked(now)
                 return
             # holding within epsilon of the last observed value
             self._classify_settled_locked(now)
@@ -1657,6 +1672,20 @@ class CircadianDaemon:
         that was never judged.
         """
         if self._obs_brightness is None or self._obs_classified:
+            return
+        if (
+            self._cmd_on
+            and self._cmd_brightness is not None
+            and abs(self._obs_brightness - self._cmd_brightness) <= self._override_band
+        ):
+            # Fast path (bias twin in _bias_classify_locked): within band of
+            # the commanded target the verdict can only be "self" -> classify
+            # immediately, no settle wait.
+            self._obs_classified = True
+            _LOG.debug(
+                "zone at %.1f%% matches command -> classified self immediately",
+                self._obs_brightness,
+            )
             return
         if now - self._obs_since < self._settle_window_s:
             return  # not stable long enough yet

@@ -1768,3 +1768,77 @@ def test_night_guide_and_rhythm_both_react_to_the_same_motion_event(caplog):
     assert any(
         "rhythm: motion in 'Living room'" in r.message for r in caplog.records
     ), "rhythm should still have recorded the same motion event"
+
+
+# -- matches-command fast classification (the 2026-08-22 play-bar TV-off lag) - #
+def test_bias_command_echo_classifies_immediately_and_edge_writes_without_defer():
+    # LIVE 2026-08-22: per-tick hold writes keep pushing _bias_cmd_fade_until
+    # forward, so a bias light's own echo stayed "not yet judged" for as long
+    # as the TV was on; the TV-off edge then deferred the night-look write for
+    # minutes. A fresh value within override_band of the commanded brightness
+    # must classify as "self" immediately, letting the edge write land in the
+    # same tick.
+    cfg = Config.parse({
+        "bridge": {"host": "x", "application_key": "k"},
+        "location": {"lat": 45.5152, "lon": -122.6784, "tz_offset_hours": -7},
+        "motion_policies": [],
+        "circadian_daemon": {
+            "zone": "Night Guide", "interval": "60s", "transition": "75s",
+            "night_look": {"brightness": 1, "hex": "#ff0000"},
+            "bias": {
+                "lights": {
+                    "Couch": {"look": {"hex": "1a0a00", "brightness": 95}, "idle": "circadian"},
+                },
+                "triggers": {"sse": {"on_trigger": "On", "off_trigger": "Off"}},
+            },
+        },
+    })
+    d = CircadianDaemon.for_test(_FakeClient(), cfg, grouped_light_rid="GL")
+    d._bias_rids = {"Couch": "Lcouch"}
+    t = _epoch(23, 30)                                  # out of window: night look rules
+    d._bias_aggregator.on(t)
+    d._tick_once(t)                                     # TV on -> hold 95% written; cmd latched
+    d._handle_event(_light_ev("Lcouch", dimming={"brightness": 94.9}), t + 5)
+    assert d._bias_obs["Lcouch"][2] is True             # command echo -> classified, no settle wait
+    d._tick_once(t + 60)                                # hold re-write refreshes fade_until
+    d._client.writes.clear()
+    d._bias_aggregator.off(t + 65)                      # TV off right after a hold write
+    d._tick_once(t + 65)
+    lw = _light_writes(d)
+    assert lw["Lcouch"]["dimming"] == {"brightness": 1.0}   # night look written THIS tick
+
+
+def test_bias_far_echo_still_waits_and_defers_at_edge():
+    # The guard the fast path must not weaken: a value far from the commanded
+    # brightness (a human mid-adjustment) stays unjudged until it settles, and
+    # an edge arriving meanwhile still defers rather than writes over it.
+    d = _bias_daemon()
+    t = _epoch(13, 14)
+    d._bias_aggregator.on(t)
+    d._tick_once(t)                                     # Couch hold 5% written; cmd latched
+    d._handle_event(_light_ev("Lcouch", dimming={"brightness": 60.0}), t + 5)
+    assert d._bias_obs["Lcouch"][2] is False            # far from 5% -> NOT fast-classified
+
+
+def test_zone_command_echo_classifies_immediately():
+    # Zone twin: a grouped-light echo within override_band of the commanded
+    # target classifies instantly (debug "self"), instead of waiting out the
+    # settle window behind our own fade.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    target = daemon._cmd_brightness
+    daemon._handle_event(_dim(target - 1.0), t0 + 0.5)  # single echo, mid-own-fade
+    assert daemon._obs_classified is True
+    assert daemon._controller.mode == "driving"
+
+
+def test_zone_far_value_still_waits_for_settle():
+    # A far value mid-fade must stay unjudged (no premature suspend, no
+    # premature classification) — the fast path applies only to command echoes.
+    daemon = CircadianDaemon.for_test(_FakeClient(), _cfg(), grouped_light_rid="GL")
+    t0 = _epoch(12, 0)
+    daemon._tick_once(t0)
+    daemon._handle_event(_dim(5.0), t0 + 0.5)           # far from any daytime target
+    assert daemon._obs_classified is False
+    assert daemon._controller.mode == "driving"
