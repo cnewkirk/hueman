@@ -586,6 +586,7 @@ class NightMotionReconciler(Reconciler):
             day_scene=rids["Day"], evening_scene=rids["Evening"], night_scene=rids["Night"],
             night_start=nm.start, night_off_min=nm.timeout_min,
             night_only=(nm.mode == "night_only"),
+            sensing_only=(nm.mode == "sensing_only"),
             day_start=nm.day_start,
         )
 
