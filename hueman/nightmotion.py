@@ -157,6 +157,7 @@ def transform_automation(
     night_off_min: int = 3,
     day_start: tuple[int, int] = (8, 0),
     night_only: bool = False,
+    sensing_only: bool = False,
 ) -> dict[str, Any]:
     """Return ``config`` retargeted to a single zone with a red night timeslot.
 
@@ -187,10 +188,28 @@ def transform_automation(
     ``ValueError`` rather than silently retargeting the no-op or crashing. ``day_start``
     must lie strictly between midnight and ``night_start`` so the emitted timeslots
     stay chronological; a direct caller violating that also raises ``ValueError``.
+
+    When ``sensing_only`` is ``True`` the automation is made inert: a single
+    00:00 actionless timeslot (the bridge-schema no-op shape above) and nothing
+    else — no recalls, no ``on_no_motion``, at any hour. The MotionAware *area*
+    keeps sensing (that grid is a separate resource the sensing reconciler
+    owns), so a daemon-side consumer (``circadian_daemon.night_guide``) can act
+    on the motion events instead. This mode exists for the 2026-08-25 submarine
+    night_look: the bridge automation's recall-then-``all_off`` would extinguish
+    an all-night parked hold on the first motion of the night, so guidance moves
+    daemon-side where the hand-back recomputes the resting state. Idempotent:
+    its own output is a valid input. ``sensing_only`` wins over ``night_only``.
     """
     cfg = copy.deepcopy(config)
     motion = cfg["motion"]
     motion["where"] = [{"group": {"rid": zone_rid, "rtype": "zone"}}]
+
+    if sensing_only:
+        motion["when"]["timeslots"] = [{
+            "start_time": {"time": {"hour": 0, "minute": 0}, "type": "time"},
+            "on_motion": {"recall_single": [{"action": "do_nothing"}]},
+        }]
+        return cfg
 
     slots = motion["when"]["timeslots"]
     night_slot = max(slots, key=_start_minute)

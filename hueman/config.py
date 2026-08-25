@@ -617,8 +617,8 @@ class NightMotionSpec:
         if timeout_min < 1:
             raise ConfigError(f"{ctx}.timeout must be at least 1 minute")
         mode = str(d.get("mode", "full"))
-        if mode not in ("full", "night_only"):
-            raise ConfigError(f"{ctx}.mode must be 'full' or 'night_only'")
+        if mode not in ("full", "night_only", "sensing_only"):
+            raise ConfigError(f"{ctx}.mode must be 'full', 'night_only' or 'sensing_only'")
         day_start_raw = parse_time_ref(d.get("day_start", "08:00"), ctx=f"{ctx}.day_start")
         if day_start_raw in ("sunrise", "sunset"):
             raise ConfigError(f"{ctx}.day_start must be a clock time like '08:00'")

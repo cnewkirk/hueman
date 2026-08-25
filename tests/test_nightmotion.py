@@ -576,3 +576,47 @@ def test_night_motion_reconciler_passes_day_start_through(tmp_path):
     assert starts == [(0, 0), (9, 15), (22, 34)]
     assert slots[1]["on_motion"] == {"recall_single": [{"action": "do_nothing"}]}
     assert "on_no_motion" not in slots[1]
+
+
+def test_transform_sensing_only_emits_single_inert_slot():
+    # sensing_only makes the automation inert everywhere: one 00:00 actionless
+    # slot (the bridge-schema no-op shape), no on_no_motion, no recalls at any
+    # hour — the MotionAware area keeps sensing for the daemon's night_guide.
+    cfg = transform_automation(
+        FIXTURE["configuration"], zone_rid="ZONE",
+        day_scene="DAY", evening_scene="EVE", night_scene="RED",
+        night_start=(22, 34), night_off_min=3, sensing_only=True)
+    slots = cfg["motion"]["when"]["timeslots"]
+    assert slots == [{
+        "start_time": {"time": {"hour": 0, "minute": 0}, "type": "time"},
+        "on_motion": {"recall_single": [{"action": "do_nothing"}]},
+    }]
+    assert cfg["motion"]["where"] == [{"group": {"rid": "ZONE", "rtype": "zone"}}]
+
+
+def test_transform_sensing_only_is_idempotent():
+    # Its own output must be a valid input (the reconciler re-plans from live
+    # state every cron run) — and must NOT trip the full-mode actionless guard.
+    once = transform_automation(
+        FIXTURE["configuration"], zone_rid="ZONE",
+        day_scene="DAY", evening_scene="EVE", night_scene="RED",
+        night_start=(22, 34), night_off_min=3, sensing_only=True)
+    twice = transform_automation(
+        once, zone_rid="ZONE",
+        day_scene="DAY", evening_scene="EVE", night_scene="RED",
+        night_start=(22, 34), night_off_min=3, sensing_only=True)
+    assert twice == once
+
+
+def test_night_motion_reconciler_sensing_only_mode(tmp_path):
+    doc = _night_cfg_doc(mode="sensing_only")
+    client, state = _night_state()
+    rec = NightMotionReconciler(client, state, Config.parse(doc), backup_dir=str(tmp_path))
+    rec.apply(rec.plan()[0])
+    bi = [(rid, b) for (t, rid, b) in client.updates if t == "behavior_instance"]
+    assert bi
+    slots = bi[0][1]["configuration"]["motion"]["when"]["timeslots"]
+    assert slots == [{
+        "start_time": {"time": {"hour": 0, "minute": 0}, "type": "time"},
+        "on_motion": {"recall_single": [{"action": "do_nothing"}]},
+    }]
