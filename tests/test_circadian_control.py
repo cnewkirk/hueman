@@ -106,3 +106,15 @@ def test_brightness_floor_and_ceiling_clamp():
     c = _ctrl(brightness_floor=40.0, brightness_ceiling=80.0)
     a = c.tick(_epoch(13, 14))                  # would be ~100 -> clamped to 80
     assert isinstance(a, DriveTo) and a.brightness == 80.0
+
+
+def test_is_night_out_of_window_or_past_civil_dusk() -> None:
+    """The home reads as night outside the window (parked at the overnight
+    look) and, in window, only once the sun is at/below −6° — not during the
+    dusk blend (2026-06-28 Portland: sunset ~21:03, civil dusk ~21:41 PDT)."""
+    c = _ctrl()
+    assert not c.is_night(_epoch(13, 0))    # broad day
+    assert not c.is_night(_epoch(21, 15))   # twilight blend, still in window
+    assert c.is_night(_epoch(22, 10))       # past civil dusk, window still open
+    assert c.is_night(_epoch(23, 30))       # out of window
+    assert c.is_night(_epoch(3, 0))         # pre-dawn, out of window

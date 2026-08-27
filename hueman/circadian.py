@@ -137,6 +137,21 @@ class CircadianCurve:
             )
         return CircadianState(params.night_mirek, params.night_brightness)
 
+    def is_night(self, elevation_deg: float, noon_elevation_deg: float) -> bool:
+        """Whether :meth:`state_at` has fully reached the night look here.
+
+        True exactly when the sample equals the night anchors: sun at or below
+        −6° (the twilight lerp lands on night at −6 itself), or a day whose
+        noon never clears the horizon. The twilight blend region is *not*
+        night — consumers gating "the home reads dark" behaviour (the bias
+        hold's night variant) should flip only once the home look has fully
+        arrived, not mid-fade through dusk.
+        """
+        sin_noon = math.sin(math.radians(noon_elevation_deg))
+        if noon_elevation_deg <= 0 or sin_noon <= 0:
+            return True
+        return elevation_deg <= -6.0
+
     def sample_day(
         self, solar: SolarCalculator, date: _dt.date, step_minutes: int = 60
     ) -> list[tuple[int, CircadianState]]:

@@ -97,6 +97,22 @@ class CircadianController:
         """Return the curve sample (brightness/mirek/transition) for ``now``."""
         return self._drive_to(now)
 
+    def is_night(self, now: float) -> bool:
+        """Whether the home reads as night at ``now``.
+
+        True outside the drive window (the zone is parked at its overnight
+        look) or once the curve has fully reached its night anchors (sun at or
+        below −6°) — see :meth:`CircadianCurve.is_night`. The bias hold keys
+        its per-light ``night_look`` variant off this, so TV viewing against a
+        dim home gets the glare-cut hold while dusk's twilight blend still
+        gets the full daytime one.
+        """
+        if not self._in_window(now):
+            return True
+        date = self._local_dt(now).date()
+        elev = self._solar.solar_elevation(date, self._minute_of_day(now))
+        return self._curve.is_night(elev, self._solar.noon_elevation(date))
+
     # -- time helpers ------------------------------------------------------- #
     def _local_dt(self, now: float) -> _dt.datetime:
         """Return ``now`` as a local datetime (DST-correct when a tz name is set)."""

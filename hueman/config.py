@@ -698,50 +698,77 @@ def _opt_str(value: Any) -> str | None:
 class BiasLight:
     """One viewing-area fixture in the daemon's TV bias-hold set.
 
+    The TV-state × day-phase grid this light moves through:
+
+    * TV on, home in daylight/twilight: hold ``look``.
+    * TV on, home at night (out of window, or sun ≤ −6°): hold ``night_look``
+      when configured, else ``look``.
+    * TV off, in window (``idle: circadian``): follow the curve with the zone.
+    * TV off, out of window (``idle: circadian``): join the *zone-level*
+      ``circadian_daemon.night_look`` hold, brightness overridable per-light
+      via ``night_brightness``.
+
     Attributes:
         name: The Hue light name the daemon drives directly (per-light).
         look: The static hold look (always on; a concrete colour, never circadian).
+        night_look: Optional dimmer hold used instead of ``look`` while the TV
+            is on at night — an ambience fixture bright enough for a lit room
+            reads as glare against a dark one. Same shape and rules as
+            ``look``. Distinct from ``night_brightness``, which is TV-*off*
+            calibration.
         idle: What the light does when the TV is off — ``"circadian"`` (follow the
             curve while in the daemon's active window) or ``"off"``.
         night_brightness: Optional per-light brightness override (0-100) used
-            instead of ``night_look``'s own brightness when this light joins
-            the night theme out of window — same colour as everyone else, but
-            calibrated for this fixture's mount (e.g. an indirect uplight
-            needs more lumens than a direct one to read the same). ``None``
-            uses ``night_look``'s brightness unchanged, same as every other
-            ``idle: circadian`` light.
+            instead of the zone-level ``night_look``'s own brightness when this
+            light joins the night theme out of window — same colour as everyone
+            else, but calibrated for this fixture's mount (e.g. an indirect
+            uplight needs more lumens than a direct one to read the same).
+            ``None`` uses that ``night_look``'s brightness unchanged, same as
+            every other ``idle: circadian`` light.
     """
 
     name: str
     look: LightState
     idle: str
     night_brightness: float | None = None
+    night_look: LightState | None = None
+
+    @staticmethod
+    def _static_look(value: Any, ctx: str) -> LightState:
+        """Parse a bias hold look: explicit ``brightness`` plus a static colour."""
+        look_d = _as_dict(value, ctx)
+        if "brightness" not in look_d:
+            raise ConfigError(f"{ctx}: 'brightness' is required for a bias look")
+        try:
+            bri = float(look_d["brightness"])
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"{ctx}: brightness must be a number, got {look_d['brightness']!r}")
+        if not 0 <= bri <= 100:
+            raise ConfigError(f"{ctx}: brightness must be 0-100")
+        color = Color.parse(look_d, ctx)  # requires mirek/kelvin/hex
+        if color.mode == "circadian":
+            raise ConfigError(f"{ctx}: a bias look must be a static colour, not 'circadian'")
+        return LightState(on=True, brightness=bri, color=color)
 
     @classmethod
     def parse(cls, name: str, value: Any, ctx: str) -> "BiasLight":
         """Parse one entry of the ``bias.lights:`` mapping (keyed by light name).
 
-        The ``look`` must carry an explicit ``brightness`` (0-100) and a static
-        colour — ``circadian`` is rejected because a hold has to be a fixed
-        target. ``idle`` must be ``circadian`` or ``off``; a YAML-1.1 bare
-        ``off`` (parsed as ``False``) is accepted as the string ``"off"``.
-        ``night_brightness`` (0-100, optional) overrides just the brightness
-        this light uses when it joins ``night_look``.
+        The ``look`` (and the optional ``night_look``) must carry an explicit
+        ``brightness`` (0-100) and a static colour — ``circadian`` is rejected
+        because a hold has to be a fixed target. ``idle`` must be ``circadian``
+        or ``off``; a YAML-1.1 bare ``off`` (parsed as ``False``) is accepted
+        as the string ``"off"``. ``night_brightness`` (0-100, optional)
+        overrides just the brightness this light uses when it joins the
+        zone-level ``night_look``.
         """
         d = _as_dict(value, ctx)
-        look_d = _as_dict(_require(d, "look", ctx), f"{ctx}.look")
-        if "brightness" not in look_d:
-            raise ConfigError(f"{ctx}.look: 'brightness' is required for a bias look")
-        try:
-            bri = float(look_d["brightness"])
-        except (TypeError, ValueError):
-            raise ConfigError(
-                f"{ctx}.look: brightness must be a number, got {look_d['brightness']!r}")
-        if not 0 <= bri <= 100:
-            raise ConfigError(f"{ctx}.look: brightness must be 0-100")
-        color = Color.parse(look_d, f"{ctx}.look")  # requires mirek/kelvin/hex
-        if color.mode == "circadian":
-            raise ConfigError(f"{ctx}.look: a bias look must be a static colour, not 'circadian'")
+        look = cls._static_look(_require(d, "look", ctx), f"{ctx}.look")
+        night_look = (
+            cls._static_look(d["night_look"], f"{ctx}.night_look")
+            if d.get("night_look") is not None else None
+        )
         # YAML 1.1 coerces an unquoted ``idle: off`` to the boolean ``False``;
         # accept that as the string "off" so the value needn't be quoted.
         raw_idle = d.get("idle", "circadian")
@@ -758,8 +785,8 @@ class BiasLight:
             if not 0 <= night_bri <= 100:
                 raise ConfigError(f"{ctx}.night_brightness must be 0-100")
         return cls(
-            name=str(name), look=LightState(on=True, brightness=bri, color=color), idle=idle,
-            night_brightness=night_bri,
+            name=str(name), look=look, idle=idle,
+            night_brightness=night_bri, night_look=night_look,
         )
 
 

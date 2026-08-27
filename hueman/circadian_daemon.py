@@ -319,6 +319,9 @@ class CircadianDaemon:
         # redundant per-tick off re-PUTs (7 writes/min overnight, observed to
         # contribute to bridge 'command queue is full' rejections).
         self._bias_off_written: set[str] = set()
+        # Night state the bias set was last driven with, so the dusk/dawn flip
+        # of the per-light night_look holds logs exactly once per flip.
+        self._bias_last_night: bool | None = None
         # --- per-light manual-override freeze (bias set) ---
         # The bias set is driven per light, so overrides are honoured per
         # light: a viewing light a human adjusted is FROZEN (skipped by
@@ -658,7 +661,8 @@ class CircadianDaemon:
         Independent of the main set: ``in_window``/``curve`` come straight from the
         controller's public accessors (not its mode), so a manual override of the
         *main* zone never freezes the viewing lights. ``tv_on`` is the OR of the
-        enabled trigger sources.
+        enabled trigger sources. ``night`` likewise comes from the controller
+        and swaps in any per-light ``night_look`` holds while the TV is on.
 
         A committed TV flip is an *edge*: every light gets the short
         ``bias.transition`` fade, and the flip is logged. The edge is latched
@@ -682,7 +686,14 @@ class CircadianDaemon:
             return  # callers guard on spec.bias; narrowing for the type checker
         in_window = self._controller.in_window(now)
         curve = self._controller.drive_to(now) if in_window else None
+        night = self._controller.is_night(now)
         tv_on = self._bias_aggregator.tv_on(now)
+        if tv_on and self._bias_last_night is not None and night != self._bias_last_night:
+            _LOG.info(
+                "bias: night %s mid-hold -> lights with a night_look re-target on the steady fade",
+                "engaged" if night else "released",
+            )
+        self._bias_last_night = night
         edge = tv_on != self._bias_last_applied_on
         if edge:
             self._bias_off_written.clear()   # re-arm off writes for the new state
@@ -696,7 +707,7 @@ class CircadianDaemon:
         latch = True   # clears only on a *transient* failure worth retrying
         for action in bias_actions(
             bias, tv_on=tv_on, in_window=in_window, curve=curve,
-            night_look=self._spec.night_look,
+            night_look=self._spec.night_look, night=night,
             transition_ms=self._spec.transition_ms, fade_off_ms=self._spec.fade_off_ms,
             edge=edge,
         ):
