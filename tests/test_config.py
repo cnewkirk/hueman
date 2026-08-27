@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hueman.config import Color, Config, SecuritySpec, parse_duration, parse_time_ref
+from hueman.config import BiasLight, Color, Config, SecuritySpec, parse_duration, parse_time_ref
 from hueman.errors import ConfigError
 from tests.conftest import make_config
 
@@ -523,3 +523,37 @@ def test_security_lights_per_frame_default_and_floor():
     assert cfg.security.lights_per_frame == 5
     with pytest.raises(ConfigError, match="lights_per_frame"):
         Config.parse(_sec_doc({"groups": ["All"], "chaos": {"lights_per_frame": 0}}))
+
+
+def test_bias_light_parses_optional_night_look() -> None:
+    """night_look parses with the same rules as look and stays optional."""
+    light = BiasLight.parse(
+        "Couch strip",
+        {"look": {"mirek": 400, "brightness": 24},
+         "night_look": {"mirek": 454, "brightness": 8},
+         "idle": "circadian"},
+        "ctx",
+    )
+    assert light.night_look is not None
+    assert light.night_look.brightness == 8.0
+    assert light.night_look.color.mirek == 454
+    bare = BiasLight.parse("Bars", {"look": {"mirek": 153, "brightness": 95}}, "ctx")
+    assert bare.night_look is None
+
+
+def test_bias_light_night_look_is_validated_like_look() -> None:
+    """A night_look is a hold: explicit in-range brightness and a colour required."""
+    with pytest.raises(ConfigError, match=r"night_look.*brightness"):
+        BiasLight.parse(
+            "Couch strip",
+            {"look": {"mirek": 400, "brightness": 24},
+             "night_look": {"mirek": 454}},
+            "ctx",
+        )
+    with pytest.raises(ConfigError, match=r"night_look.*brightness must be 0-100"):
+        BiasLight.parse(
+            "Couch strip",
+            {"look": {"mirek": 400, "brightness": 24},
+             "night_look": {"mirek": 454, "brightness": 180}},
+            "ctx",
+        )

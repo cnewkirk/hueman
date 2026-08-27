@@ -48,3 +48,15 @@ def test_colour_warms_as_sun_drops() -> None:
 def test_polar_night_nonpositive_noon_elevation_is_night() -> None:
     s = _curve().state_at(-5.0, -10.0)
     assert (s.mirek, s.brightness) == (P.night_mirek, P.night_brightness)
+
+
+def test_is_night_tracks_the_night_regime_exactly() -> None:
+    """is_night flips exactly where state_at lands on the night anchors:
+    civil dusk (−6°) and below are night; the twilight blend above it is not."""
+    c = _curve()
+    assert not c.is_night(NOON, NOON)      # broad day
+    assert not c.is_night(0.0, NOON)       # horizon = evening look
+    assert not c.is_night(-5.9, NOON)      # still blending through twilight
+    assert c.is_night(-6.0, NOON)          # blend lands on night here
+    assert c.is_night(-25.0, NOON)         # deep night
+    assert c.is_night(10.0, 0.0)           # polar: noon never clears the horizon

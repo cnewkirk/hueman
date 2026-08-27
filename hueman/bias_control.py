@@ -63,6 +63,7 @@ def bias_actions(
     in_window: bool,
     curve: DriveTo | None,
     night_look: LightState | None = None,
+    night: bool = False,
     transition_ms: int,
     fade_off_ms: int,
     edge: bool = False,
@@ -71,7 +72,12 @@ def bias_actions(
 
     * ``tv_on`` -> every light holds its ``look`` — the only case any light is
       handled *differently* from the rest of the home; this is a TV-on-only
-      override, not a standing "viewing set" identity.
+      override, not a standing "viewing set" identity. When ``night`` is set
+      (the home reads as night: out of window, or sun ≤ −6°), a light that
+      declares its own ``night_look`` holds that instead — an ambience level
+      tuned for a lit room reads as glare against a dark one, so the hold
+      dims with the house. Lights without one (e.g. the backlight bars) keep
+      their full ``look`` around the clock.
     * otherwise ``idle == "circadian"``: join whatever the rest of the home is
       doing. In window with a ``curve`` sample -> follow the curve (same
       brightness/mirek as the main set). Out of window (or in window with no
@@ -96,7 +102,11 @@ def bias_actions(
     actions: list[BiasHold | BiasDrive | BiasOff] = []
     for light in spec.lights:
         if tv_on:
-            actions.append(BiasHold(light.name, light.look, fade))
+            hold = (
+                light.night_look
+                if night and light.night_look is not None else light.look
+            )
+            actions.append(BiasHold(light.name, hold, fade))
         elif light.idle == "circadian" and in_window and curve is not None:
             actions.append(BiasDrive(light.name, curve.brightness, curve.mirek, fade))
         elif light.idle == "circadian" and night_look is not None:

@@ -237,3 +237,45 @@ def test_aggregator_reset_clears_every_source() -> None:
     assert agg.active(2.0) is False
     agg.on(3.0, "file")                  # a fresh arm after reset still works
     assert agg.active(3.0) is True
+
+
+def test_tv_on_at_night_swaps_in_the_per_light_night_look() -> None:
+    """TV on at night: a light with its own night_look holds that (glare-cut)
+    look; a light without one (the backlight bars) keeps its full look."""
+    dim = LightState(on=True, brightness=8.0, color=Color(mode="ct", mirek=454))
+    spec = BiasSpec(
+        lights=(
+            BiasLight(
+                name="Couch strip",
+                look=LightState(on=True, brightness=24.0, color=Color(mode="ct", mirek=400)),
+                idle="circadian",
+                night_look=dim,
+            ),
+            BiasLight(
+                name="Play bars",
+                look=LightState(on=True, brightness=95.0, color=Color(mode="ct", mirek=153)),
+                idle="circadian",
+            ),
+        ),
+        transition_ms=2_000, sse_on=None, sse_off=None, file_on=None, file_off=None,
+        probe_enabled=False, probe_host=None, probe_mode="tcp", probe_port=3001,
+        probe_interval_ms=5000, probe_debounce_ms=5000,
+    )
+    at_night = {a.light: a for a in bias_actions(
+        spec, tv_on=True, in_window=False, curve=None, night=True,
+        transition_ms=75_000, fade_off_ms=90_000)}
+    assert at_night["Couch strip"].look == dim
+    assert at_night["Play bars"].look.brightness == 95.0   # no night_look -> unchanged
+    by_day = {a.light: a for a in bias_actions(
+        spec, tv_on=True, in_window=True, curve=CURVE, night=False,
+        transition_ms=75_000, fade_off_ms=90_000)}
+    assert by_day["Couch strip"].look.brightness == 24.0   # full look by day
+
+
+def test_night_flag_leaves_tv_off_paths_alone() -> None:
+    """night only selects the TV-on hold variant; the TV-off idle paths are
+    governed by in_window/night_look exactly as before."""
+    spec = _spec(("Couch", "circadian"))
+    actions = bias_actions(spec, tv_on=False, in_window=True, curve=CURVE, night=True,
+                           transition_ms=75_000, fade_off_ms=90_000)
+    assert isinstance(actions[0], BiasDrive)   # still the curve, not a hold
