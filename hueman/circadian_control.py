@@ -126,17 +126,31 @@ class CircadianController:
         return d.hour * 60 + d.minute + d.second / 60.0
 
     def _window(self, date: _dt.date) -> tuple[int, int]:
-        """Return ``(start_min, hand_off_min)`` for ``date``, start sun-resolved."""
+        """Return ``(start_min, hand_off_min)`` for ``date``, both sun-resolvable."""
         sun = self._solar.sun_times(date)
         start = self._spec.start.resolve(sun.sunrise_min, sun.sunset_min)
-        return start, self._spec.hand_off_min
+        anchor = self._spec.hand_off_anchor
+        hand_off = (anchor.resolve(sun.sunrise_min, sun.sunset_min)
+                    if anchor is not None else self._spec.hand_off_min)
+        return start, hand_off
 
     def _in_window(self, now: float) -> bool:
-        """Return whether ``now`` falls in ``[start, hand_off)`` for its local date."""
+        """Return whether ``now`` falls in the drive window for its local date.
+
+        A start at or before the hand-off covers ``[start, hand_off)`` within
+        one day. A start AFTER the hand-off wraps midnight — ``start: sunset``
+        with ``hand_off: sunrise`` runs dusk to dawn: in-window on the evening
+        leg (``minute >= start``) or the small-hours leg (``minute <
+        hand_off``). Both legs resolve against THIS date's sun times; the
+        drift from judging the small hours by that morning's (already-past)
+        sunrise rather than tomorrow's is under a minute — inside one tick.
+        """
         date = self._local_dt(now).date()
         start, hand_off = self._window(date)
         minute = self._minute_of_day(now)
-        return start <= minute < hand_off
+        if start <= hand_off:
+            return start <= minute < hand_off
+        return minute >= start or minute < hand_off
 
     # -- target ------------------------------------------------------------- #
     def _drive_to(self, now: float) -> DriveTo:
