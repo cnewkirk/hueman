@@ -557,3 +557,31 @@ def test_bias_light_night_look_is_validated_like_look() -> None:
              "night_look": {"mirek": 454, "brightness": 180}},
             "ctx",
         )
+
+
+def test_circadian_daemon_hand_off_sun_anchor() -> None:
+    """`hand_off` accepts a sun anchor, enabling overnight (dusk->dawn) windows."""
+    from hueman.config import Anchor
+    cfg = Config.parse(_cfg_doc({"circadian_daemon": {
+        "zone": "Z", "start": "sunset", "hand_off": "sunrise+15m"}}))
+    d = cfg.circadian_daemon
+    assert d.start == Anchor("sunset", 0)
+    assert d.hand_off_anchor == Anchor("sunrise", 15)
+
+
+def test_circadian_daemon_hand_off_clock_fills_legacy_minute() -> None:
+    """A clock hand_off still fills hand_off_min and mirrors into the anchor."""
+    from hueman.config import Anchor
+    cfg = Config.parse(_cfg_doc({"circadian_daemon": {"zone": "Z", "hand_off": "23:00"}}))
+    d = cfg.circadian_daemon
+    assert d.hand_off_min == 23 * 60
+    assert d.hand_off_anchor == Anchor("clock", 23 * 60)
+
+
+def test_anchor_describe() -> None:
+    """describe() renders clock anchors as HH:MM and sun anchors with offsets."""
+    from hueman.config import Anchor
+    assert Anchor("clock", 22 * 60 + 34).describe() == "22:34"
+    assert Anchor("sunrise", 0).describe() == "sunrise"
+    assert Anchor("sunset", -120).describe() == "sunset-120m"
+    assert Anchor("sunset", 30).describe() == "sunset+30m"

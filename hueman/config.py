@@ -94,6 +94,14 @@ class Anchor:
             minutes = anchor + self.value
         return int(max(0, min(1439, round(minutes))))
 
+    def describe(self) -> str:
+        """Render for logs: ``'22:34'`` for clock, ``'sunset+30m'`` for sun bases."""
+        if self.base == "clock":
+            return f"{self.value // 60:02d}:{self.value % 60:02d}"
+        if self.value == 0:
+            return self.base
+        return f"{self.base}{'+' if self.value > 0 else '-'}{abs(self.value)}m"
+
 
 def parse_anchor(value: Any, *, ctx: str) -> Anchor:
     """Parse ``"sunrise"`` / ``"sunset-2h"`` / ``"sunset+90m"`` / ``"23:30"``."""
@@ -951,13 +959,21 @@ class CircadianDaemonSpec:
     night_look: "LightState | None" = None
     # Daemon-native motion-triggered path lighting (optional). See NightGuideSpec.
     night_guide: "NightGuideSpec | None" = None
+    # Sun-resolvable hand-off (set by parse; None on directly-constructed
+    # specs, which fall back to the legacy fixed ``hand_off_min``). With
+    # ``hand_off: sunrise`` the drive window may END at a sun time — combined
+    # with ``start: sunset`` that yields an overnight (midnight-crossing)
+    # window: on at dusk, off at dawn. See CircadianController._in_window.
+    hand_off_anchor: "Anchor | None" = None
 
     @classmethod
     def parse(cls, value: Any, ctx: str = "circadian_daemon") -> "CircadianDaemonSpec":
         """Parse the ``circadian_daemon:`` block.
 
         Only ``zone`` is required; everything else has a live-tested default.
-        ``hand_off`` must be a clock time (not a sun anchor). Durations under
+        ``hand_off`` accepts a clock time or a sun anchor (``sunrise``,
+        ``sunset+30m``, …) just like ``start``; a start after the hand-off
+        makes the window cross midnight. Durations under
         ``manual_override``/``retry`` and the top level are parsed to ms, and
         an optional ``bias`` block is delegated to :meth:`BiasSpec.parse`.
         """
@@ -967,10 +983,13 @@ class CircadianDaemonSpec:
         log = _as_dict(d.get("log"), f"{ctx}.log")
         floor = d.get("brightness_floor")
         ceil = d.get("brightness_ceiling")
+        hand_off = parse_anchor(d.get("hand_off", "22:34"), ctx=f"{ctx}.hand_off")
         return cls(
             zone=str(_require(d, "zone", ctx)),
             start=parse_anchor(d.get("start", "sunrise"), ctx=f"{ctx}.start"),
-            hand_off_min=_clock_minute(d.get("hand_off", "22:34"), f"{ctx}.hand_off"),
+            # Legacy fixed-minute field, kept for directly-constructed specs;
+            # sun-based hand-offs resolve through hand_off_anchor instead.
+            hand_off_min=hand_off.value if hand_off.base == "clock" else 0,
             interval_ms=parse_duration(d.get("interval", "60s"), ctx=f"{ctx}.interval"),
             transition_ms=parse_duration(d.get("transition", "75s"), ctx=f"{ctx}.transition"),
             fade_off_ms=parse_duration(d.get("fade_off", "90s"), ctx=f"{ctx}.fade_off"),
@@ -996,6 +1015,7 @@ class CircadianDaemonSpec:
             night_look=cls._parse_night_look(d.get("night_look"), f"{ctx}.night_look"),
             night_guide=NightGuideSpec.parse(d["night_guide"], f"{ctx}.night_guide")
             if d.get("night_guide") else None,
+            hand_off_anchor=hand_off,
         )
 
     @staticmethod

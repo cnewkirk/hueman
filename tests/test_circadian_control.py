@@ -118,3 +118,57 @@ def test_is_night_out_of_window_or_past_civil_dusk() -> None:
     assert c.is_night(_epoch(22, 10))       # past civil dusk, window still open
     assert c.is_night(_epoch(23, 30))       # out of window
     assert c.is_night(_epoch(3, 0))         # pre-dawn, out of window
+
+
+# -- overnight (midnight-crossing) windows: start after hand_off wraps -------- #
+
+def _overnight_ctrl(**kw):
+    """Dusk->dawn window: start at sunset, hand off at sunrise."""
+    return _ctrl(start=Anchor("sunset", 0), hand_off_anchor=Anchor("sunrise", 0), **kw)
+
+
+def test_overnight_window_drives_evening_and_small_hours():
+    c = _overnight_ctrl()
+    a = c.tick(_epoch(22, 0))                          # after sunset (~21:03 PDT)
+    assert isinstance(a, DriveTo) and c.mode == "driving"
+    a = c.tick(_epoch(3, 0, _dt.date(2026, 6, 29)))    # small hours, next date
+    assert isinstance(a, DriveTo) and c.mode == "driving"
+
+
+def test_overnight_window_idles_by_day():
+    c = _overnight_ctrl()
+    assert isinstance(c.tick(_epoch(12, 0)), Hold)
+    assert c.mode == "night_idle"
+
+
+def test_overnight_window_fades_off_at_sunrise():
+    c = _overnight_ctrl()
+    c.tick(_epoch(4, 30))                              # pre-dawn, in window (~05:25 sunrise)
+    a = c.tick(_epoch(6, 0))                           # past sunrise -> close edge
+    assert isinstance(a, FadeOff)
+    assert c.mode == "night_idle"
+    assert isinstance(c.tick(_epoch(12, 0)), Hold)     # stays off through the day
+
+
+def test_overnight_window_opens_at_sunset():
+    c = _overnight_ctrl()
+    c.tick(_epoch(12, 0))                              # day: idle
+    a = c.tick(_epoch(21, 30))                         # past sunset -> window open
+    assert isinstance(a, DriveTo) and c.mode == "driving"
+
+
+def test_hand_off_anchor_clock_matches_legacy_behavior():
+    c = _ctrl(hand_off_anchor=Anchor("clock", 22 * 60 + 34))
+    c.tick(_epoch(20, 0))                              # establish DRIVING
+    a = c.tick(_epoch(22, 40))                         # just past 22:34
+    assert isinstance(a, FadeOff) and c.mode == "night_idle"
+
+
+def test_overnight_manual_override_holds_until_resume():
+    c = _overnight_ctrl()
+    c.tick(_epoch(23, 0))
+    c.on_external_change(_epoch(23, 0))
+    assert isinstance(c.tick(_epoch(23, 30)), Hold)    # suspended, hands off
+    c.on_resume(_epoch(23, 45))
+    a = c.tick(_epoch(23, 45))
+    assert isinstance(a, DriveTo) and c.mode == "driving"

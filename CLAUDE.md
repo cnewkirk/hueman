@@ -64,8 +64,13 @@ reverts nor recreates it.
 
 **Mode 1 — the circadian daemon** (`hueman circadian run`, typically a Docker
 container near the bridge): re-samples the solar curve every 60 s and drives one
-grouped_light zone with long cross-fades from sunrise to `hand_off`, detects
-manual overrides by settle-and-compare, and owns the TV-bias hold.
+grouped_light zone with long cross-fades from `start` to `hand_off`, detects
+manual overrides by settle-and-compare, and owns the TV-bias hold. Both window
+anchors are sun-resolvable (`sunrise`/`sunset±30m`/clock); a `start` after the
+`hand_off` wraps midnight — `start: sunset, hand_off: sunrise` runs an
+*overnight* window (on at dusk, curve to the night anchors, FadeOff at dawn),
+the intended shape for a second single-lamp daemon instance alongside the main
+one (one zone per daemon; separate config + container, e.g. a bookshelf lamp).
 **Manual-override contract (2026-08-12):** a manual change owns the lights
 until an *explicit* hand-back — zone off→on power-cycle, `hueman circadian
 resume`/resume trigger, or a daemon restart. That includes a zone turned on

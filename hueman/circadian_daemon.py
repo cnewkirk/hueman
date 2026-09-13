@@ -474,13 +474,13 @@ class CircadianDaemon:
         self._stop_event.clear()
         self._clear_stale_security_files(self._clock())
         _LOG.info(
-            "circadian daemon driving %r (grouped_light %s); interval=%.0fs transition=%.0fs hand_off=%02d:%02d",
+            "circadian daemon driving %r (grouped_light %s); interval=%.0fs transition=%.0fs hand_off=%s",
             self._spec.zone,
             self._rid,
             self._spec.interval_ms / 1000,
             self._spec.transition_ms / 1000,
-            self._spec.hand_off_min // 60,
-            self._spec.hand_off_min % 60,
+            self._spec.hand_off_anchor.describe() if self._spec.hand_off_anchor is not None
+            else f"{self._spec.hand_off_min // 60:02d}:{self._spec.hand_off_min % 60:02d}",
         )
         interval_s = self._spec.interval_ms / 1000.0
         ticker = threading.Thread(target=self._tick_loop, args=(interval_s,), daemon=True)
